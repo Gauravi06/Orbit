@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16
+    container_name: orbit_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: orbit_user
+      POSTGRES_PASSWORD: orbit_pass
+      POSTGRES_DB: orbit_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - orbit_pgdata:/var/lib/postgresql/data
+
+volumes:
+  orbit_pgdata:
