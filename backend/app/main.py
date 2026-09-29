@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import auth
+from app.api.routes import auth, tasks, schedules
 
 app = FastAPI(title="Orbit API")
 
@@ -13,6 +13,8 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(tasks.router)
+app.include_router(schedules.router)
 
 @app.get("/health")
 def health_check():
