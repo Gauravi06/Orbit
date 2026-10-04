@@ -1,48 +1,76 @@
-import { BrowserRouter, Routes, Route, Navigate, NavLink } from "react-router-dom";
-import Login from "./login";
-import Schedule from "./schedule";
-import Tasks from "./Tasks";
-import DesignGuide from "./pages/DesignGuide";
-import "./styles/base.css";
-import "./App.css";
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import Shell from './components/Shell';
+import Login from './pages/Login';
+import Onboarding from './pages/Onboarding';
+import Today from './pages/Today';
+import Changed from './pages/Changed';
+import Tasks from './pages/Tasks';
+import DesignGuide from './pages/DesignGuide';
+import './styles/base.css';
 
-function Shell({ children }) {
-  const logout = () => {
-    localStorage.removeItem("token");
-    window.location.href = "/login";
-  };
+function AuthGuard({ children }) {
+  let isAuthed = false;
+  try {
+    isAuthed = !!(localStorage.getItem('orbit_token') || localStorage.getItem('token'));
+  } catch {
+    // defaults to false
+  }
 
-  return (
-    <>
-      <nav className="nav">
-        <div className="brand">
-          ◐ Orbit <span>Balance without burnout</span>
-        </div>
-        <div className="links">
-          <NavLink to="/" end>Plan</NavLink>
-          <NavLink to="/tasks">Tasks</NavLink>
-          <NavLink to="/design">Design</NavLink>
-        </div>
-        <button className="ghost" onClick={logout}>Log out</button>
-      </nav>
-      <main className="wrap">{children}</main>
-    </>
-  );
+  if (!isAuthed) {
+    return <Navigate to="/login" replace />;
+  }
+
+  return <Shell>{children}</Shell>;
 }
 
-export default function App() {
-  const authed = !!localStorage.getItem("token");
-  const guard = (el) => (authed ? <Shell>{el}</Shell> : <Navigate to="/login" replace />);
-
+export function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public Routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/design" element={<DesignGuide />} />
-        <Route path="/" element={guard(<Schedule />)} />
-        <Route path="/tasks" element={guard(<Tasks />)} />
-        <Route path="*" element={<Navigate to="/" replace />} />
+
+        {/* Protected App Routes */}
+        <Route
+          path="/today"
+          element={
+            <AuthGuard>
+              <Today />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/changed"
+          element={
+            <AuthGuard>
+              <Changed />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/tasks"
+          element={
+            <AuthGuard>
+              <Tasks />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/onboarding"
+          element={
+            <AuthGuard>
+              <Onboarding />
+            </AuthGuard>
+          }
+        />
+
+        {/* Default / Fallback */}
+        <Route path="/" element={<Navigate to="/today" replace />} />
+        <Route path="*" element={<Navigate to="/today" replace />} />
       </Routes>
     </BrowserRouter>
   );
 }
+
+export default App;

@@ -1,0 +1,197 @@
+.changed-page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  max-width: 820px;
+  margin: 0 auto;
+}
+
+.changed-header {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--space-4);
+}
+
+.changed-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+  color: var(--ink);
+  margin-bottom: var(--space-1);
+}
+
+.changed-subtitle {
+  font-size: var(--text-sm);
+  color: var(--ink-muted);
+}
+
+/* Prompt Card */
+.changed-card {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.changed-card-title {
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  font-weight: var(--font-bold);
+  color: var(--ink);
+}
+
+.changed-textarea {
+  min-height: 90px;
+  resize: vertical;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+}
+
+/* Example Chips */
+.changed-chips-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-2);
+}
+
+.changed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.changed-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  color: var(--ink);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.changed-chip-btn:hover {
+  background-color: var(--surface);
+  border-color: var(--accent);
+}
+
+/* Reorganizing state */
+.changed-busy-banner {
+  padding: var(--space-8);
+  text-align: center;
+  background-color: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Result Presentation (What Changed) */
+.changed-result-card {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.changed-result-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: var(--space-3);
+}
+
+.changed-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.changed-list-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--ink);
+}
+
+.changed-list-icon {
+  color: var(--accent);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.changed-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-4);
+}
+
+/* Energy Feedback Buttons */
+.feedback-rating-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+}
+
+.feedback-rating-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-2);
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--ink);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+.feedback-rating-btn:hover {
+  background-color: var(--surface-2);
+}
+
+.feedback-rating-btn.active {
+  border-color: var(--accent);
+  background-color: var(--surface-2);
+  color: var(--accent);
+}
+
+/* Gentle feedback response */
+.feedback-response-box {
+  background-color: var(--sage-bg);
+  border: 1px solid var(--sage);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--ink);
+  line-height: var(--leading-normal);
+}

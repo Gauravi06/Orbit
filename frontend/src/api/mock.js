@@ -28,17 +28,10 @@ function tomorrowDate() {
   return d;
 }
 
-function dayAfterTomorrow() {
-  const d = new Date();
-  d.setDate(d.getDate() + 2);
-  return d;
-}
-
 /* ---------- Seed Data ---------- */
 
 const today = todayDate();
 const tomorrow = tomorrowDate();
-const dayAfter = dayAfterTomorrow();
 const friday = (() => {
   const d = new Date();
   const diff = 5 - d.getDay();
@@ -90,7 +83,6 @@ const MATHS_ID = INITIAL_TASKS[6].id;
 
 function buildScheduleItems(dateObj, version) {
   const date = ymd(dateObj);
-  const isToday = date === ymd(todayDate());
   const items = [
     // Sleep (shown as context)
     {

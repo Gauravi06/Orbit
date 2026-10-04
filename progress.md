@@ -86,5 +86,14 @@ Two tables added beyond original spec, both deliberate decisions:
   4. `frontend/src/theme/useTheme.js` & `frontend/src/components/ThemeToggle.jsx`: Keyboard-accessible toggle with 1.5px stroke SVG icons.
   5. `frontend/src/pages/DesignGuide.jsx`: Interactive showcase at route `/design` displaying every color swatch, typography level, button, tag, input, card, and live theme switch.
 
+### Frontend Application & Adaptive Core — Built and Verified
+- **Phase 1 (App shell)**: Responsive header with Orbit brand, navigation links, ThemeToggle, user menu, mobile bottom bar, and auth route guard. Check via browser navigation at 360px and 1280px. Gaps: backend user profile sync in mock mode is in-memory.
+- **Phase 2 (Login & Signup)**: Calm, left-aligned auth card with form validation, demo fill button, and token persistence. Check at `/login`. Gaps: OAuth / Google login not implemented.
+- **Phase 3 (Onboarding)**: 6-step MCQ survey for sleep rhythms, focus duration (45m/90m/3h), work style, task splitting, and multi-select juggle chips. Check at `/onboarding`. Gaps: preferences stored in mock state.
+- **Phase 4 (Today Timeline)**: Vertical timeline with mono timestamps, distinct visual kinds (fixed lock, serif deep work, sage breaks, dashed decompression), calm displacement reasons, and day switcher. Check at `/today`. Gaps: real calendar ICS sync not built yet.
+- **Phase 5 & 6 (Something Changed & Feedback)**: Disruption text input with quick prompts, animated rearrangement state, version bump, plain-language "What changed" list, undo/keep actions, and gentle daily reflection. Check at `/changed`. Gaps: LLM dynamic extraction simulated by deterministic mock in mock mode.
+- **Phase 7 (Tasks & Commitments)**: Task and fixed commitment forms, 1-5 priority descriptions, and smart quick-add NLP guesser. Check at `/tasks`. Gaps: subtasks and recurring weekly rules.
+- **Phase 8 (Polish & Accessibility)**: Keyboard focus rings, aria-labels, 1.5px stroke icons via lucide-react, zero console errors, passed `npm run lint` and `npm run build`. Check via Tab keyboard traversal. Gaps: full offline service worker caching.
+
 ### Next step
-Task CRUD (create/list/update tasks for the logged-in user) on the backend and initial task list view.
+Backend integration for schedule rule engine and live FastAPI endpoints to replace mock layer.

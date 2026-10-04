@@ -1,9 +1,8 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import ThemeToggle from '../components/ThemeToggle';
 
 export function DesignGuide() {
   const [inputValue, setInputValue] = useState('Organic Chemistry Assignment');
-  const [hasError, setHasError] = useState(false);
 
   const swatches = [
     { name: '--bg', label: 'Canvas / Page Background', token: 'var(--bg)', border: true },
