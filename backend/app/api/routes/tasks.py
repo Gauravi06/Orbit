@@ -5,7 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
+from app.models.schedule_item import ScheduleItem
 from app.core.deps import get_current_user
 from app.db.session import get_db
 from app.models.task import Task
@@ -153,20 +153,17 @@ def update_task(
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_task(
     task_id: uuid.UUID,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     task = _get_owned_task(db, task_id, current_user)
-    try:
-        db.delete(task)
-        db.commit()
-    except IntegrityError:
-        # Happens once schedule items point at this task.
-        db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Task is used in a schedule and cannot be deleted yet",
-        )
+    db.query(ScheduleItem).filter(ScheduleItem.task_id == task.id).delete(synchronize_session=False)
+    db.query(ScheduleItem).filter(ScheduleItem.displaced_by_task_id == task.id).update(
+        {"displaced_by_task_id": None}, synchronize_session=False
+    )
+    db.delete(task)
+    db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

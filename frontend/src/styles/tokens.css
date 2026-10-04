@@ -1,0 +1,124 @@
+/**
+ * Orbit Design Tokens
+ * 
+ * Design Direction:
+ * Paper planner crossed with a calm editorial magazine.
+ * Warm, human, quiet. Full control via CSS variables.
+ */
+
+:root {
+  /* Typography Families */
+  --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+  --font-sans: 'Instrument Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, Monaco, monospace;
+
+  /* Type Scale (12, 14, 16, 20, 28, 40 px) */
+  --text-xs: 0.75rem;    /* 12px */
+  --text-sm: 0.875rem;   /* 14px */
+  --text-base: 1rem;     /* 16px */
+  --text-md: 1.25rem;    /* 20px */
+  --text-lg: 1.75rem;    /* 28px */
+  --text-xl: 2.5rem;     /* 40px */
+
+  /* Line Heights */
+  --leading-tight: 1.15;
+  --leading-snug: 1.35;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  /* Font Weights */
+  --font-regular: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* 4px Spacing Scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Radii (6px small, 12px medium, tags only for pills) */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-tag: 9999px;
+
+  /* Transitions (150-200ms ease-out for state changes only) */
+  --transition-fast: 150ms ease-out;
+  --transition-base: 200ms ease-out;
+}
+
+/* Light Theme: Paper (Default) */
+:root,
+html[data-theme="paper"] {
+  color-scheme: light;
+
+  /* Surfaces & Ink */
+  --bg: #F4EFE6;
+  --surface: #FBF8F2;
+  --surface-2: #EDE6D8;
+  --ink: #1F1B16;
+  --ink-muted: #6B6258;
+  --line: #DDD3C2;
+
+  /* Accents & Signals */
+  --accent: #B24322; /* terracotta (adjusted for WCAG AA >= 4.5:1 across all surfaces) */
+  --accent-hover: #9C371A;
+  --accent-contrast: #FBF8F2;
+  --sage: #536D58;   /* rest / recovery (adjusted for WCAG AA >= 4.5:1 across all surfaces) */
+  --sage-bg: #EAEFEA;
+  --error: #A33822;  /* muted brick: form validation ONLY */
+  --error-bg: #F9EBE7;
+
+  /* Floating Elevation (menus, dialogs only) */
+  --shadow-floating: 0 12px 32px -4px rgba(31, 27, 22, 0.12),
+                     0 4px 12px -2px rgba(31, 27, 22, 0.08);
+
+  /* Focus ring */
+  --focus-ring: 2px solid #B24322;
+  --focus-offset: 2px;
+}
+
+/* Dark Theme: Ink (Warm dark, NOT pure black, NOT blue-grey) */
+html[data-theme="ink"] {
+  color-scheme: dark;
+
+  /* Surfaces & Ink */
+  --bg: #14120F;
+  --surface: #1C1915;
+  --surface-2: #25211C;
+  --ink: #EFE8DA;
+  --ink-muted: #A0968A;
+  --line: #332E27;
+
+  /* Accents & Signals */
+  --accent: #E0875F;
+  --accent-hover: #EAA07E;
+  --accent-contrast: #14120F;
+  --sage: #8FAE93;
+  --sage-bg: #1B261D;
+  --error: #E87A6E;  /* muted brick: form validation ONLY */
+  --error-bg: #2B1917;
+
+  /* Floating Elevation (menus, dialogs only) */
+  --shadow-floating: 0 16px 36px -4px rgba(0, 0, 0, 0.55),
+                     0 6px 16px -2px rgba(0, 0, 0, 0.40);
+
+  /* Focus ring */
+  --focus-ring: 2px solid #E0875F;
+  --focus-offset: 2px;
+}
+
+/* Respect user's motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --transition-fast: 0ms;
+    --transition-base: 0ms;
+  }
+}

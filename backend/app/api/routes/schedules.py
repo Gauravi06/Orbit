@@ -1,10 +1,9 @@
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException
-from app.services.gemini_service import GeminiError, parse_disruption, phrase_reasons
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -14,6 +13,7 @@ from app.models.schedule import Schedule
 from app.models.schedule_item import ScheduleItem
 from app.models.task import Task, TaskType
 from app.models.user import User
+from app.services.gemini_service import GeminiError, parse_disruption, phrase_reasons
 from app.services.rule_engine import (
     TRANSITION_BUFFER,
     FixedBlock,
@@ -26,8 +26,29 @@ from app.services.rule_engine import (
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
-HORIZON = 7          # plan today + 7 days
-PREFS = Prefs()      # hardcoded for the demo (no onboarding yet)
+HORIZON = 7                      # plan today + 7 days
+PREFS = Prefs(sleep=time(23, 0)) # hardcoded for the demo (no onboarding yet)
+
+
+# ---------------------------------------------------------------- request models
+class BlockIn(BaseModel):
+    start: datetime
+    end: datetime
+    label: str = "Disruption"
+
+
+class CapIn(BaseModel):
+    day: date
+    max_minutes: int
+
+
+class DisruptionIn(BaseModel):
+    blocks: List[BlockIn] = []   # "lab ran late", "I'm sick this afternoon"
+    caps: List[CapIn] = []       # "rough day, go lighter"
+
+
+class TextIn(BaseModel):
+    text: str
 
 
 # ---------------------------------------------------------------- time helpers
@@ -82,7 +103,7 @@ def _load(db: Session, user: User):
 
 # ---------------------------------------------------------------- displacement
 def _reason(cause, kind, old: datetime, new: datetime) -> str:
-    # Swap this for a Gemini-phrased sentence later; keep it as the fallback.
+    # Template fallback; Gemini rephrases this when available.
     when = f"Moved from {old:%a %H:%M} to {new:%a %H:%M}"
     if kind == "block":
         return f"{when} because '{cause}' now blocks that time."
@@ -233,24 +254,14 @@ def _at_risk(result, tasks: List[PlanTask]):
     ]
 
 
-# ---------------------------------------------------------------- routes
-class BlockIn(BaseModel):
-    start: datetime
-    end: datetime
-    label: str = "Disruption"
-
-
-class CapIn(BaseModel):
-    day: date
-    max_minutes: int
-
-
+# ---------------------------------------------------------------- shared logic
 def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str = ""):
     now = _now()
     fixed, tasks = _load(db, user)
     blocks = [FixedBlock(b.label, _naive(b.start), _naive(b.end), 0) for b in payload.blocks]
     caps = {c.day: c.max_minutes for c in payload.caps}
 
+    # the plan the user is currently looking at (future items only)
     before = [
         (str(i.task_id), _naive(i.start_time), _naive(i.end_time))
         for i in db.query(ScheduleItem)
@@ -280,43 +291,7 @@ def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str 
     return _response(db, user, now, _at_risk(result, tasks), problems)
 
 
-@router.post("/disrupt")
-def disrupt(
-    payload: DisruptionIn,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return _apply_disruption(db, current_user, payload)
-
-
-class TextIn(BaseModel):
-    text: str
-
-
-@router.post("/disrupt-text")
-def disrupt_text(
-    payload: TextIn,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    try:
-        blocks, caps = parse_disruption(payload.text, _now())
-    except GeminiError as e:
-        raise HTTPException(status_code=503, detail=f"Couldn't interpret that right now: {e}")
-    if not blocks and not caps:
-        raise HTTPException(
-            status_code=422,
-            detail="I couldn't find a time window in that. Try: 'I'm sick this afternoon'.",
-        )
-    dis = DisruptionIn(
-        blocks=[BlockIn(**b) for b in blocks],
-        caps=[CapIn(**c) for c in caps],
-    )
-    res = _apply_disruption(db, current_user, dis, payload.text)
-    res["interpreted"] = {"blocks": blocks, "caps": caps}  # shown in the UI for transparency
-    return res
-
-
+# ---------------------------------------------------------------- routes
 @router.get("")
 def get_schedule(
     db: Session = Depends(get_db),
@@ -344,28 +319,28 @@ def disrupt(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    now = _now()
-    fixed, tasks = _load(db, current_user)
-    blocks = [FixedBlock(b.label, _naive(b.start), _naive(b.end), 0) for b in payload.blocks]
-    caps = {c.day: c.max_minutes for c in payload.caps}
+    return _apply_disruption(db, current_user, payload)
 
-    # the plan the user is currently looking at (future items only)
-    before = [
-        (str(i.task_id), _naive(i.start_time), _naive(i.end_time))
-        for i in db.query(ScheduleItem)
-        .join(Schedule, ScheduleItem.schedule_id == Schedule.id)
-        .filter(
-            Schedule.user_id == current_user.id,
-            ScheduleItem.start_time >= _aware(now),
-            ScheduleItem.task_id.isnot(None),
+
+@router.post("/disrupt-text")
+def disrupt_text(
+    payload: TextIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    try:
+        blocks, caps = parse_disruption(payload.text, _now())
+    except GeminiError as e:
+        raise HTTPException(status_code=503, detail=f"Couldn't interpret that right now: {e}")
+    if not blocks and not caps:
+        raise HTTPException(
+            status_code=422,
+            detail="I couldn't find a time window in that. Try: 'I'm sick this afternoon'.",
         )
-        .all()
-    ]
-
-    result = generate_plan(tasks, fixed + blocks, PREFS, now, HORIZON, caps)
-    displaced = _diff(before, result.placements, blocks)
-    problems = validate_plan(
-        result.placements, {t.id: t for t in tasks}, fixed + blocks, PREFS, now
+    dis = DisruptionIn(
+        blocks=[BlockIn(**b) for b in blocks],
+        caps=[CapIn(**c) for c in caps],
     )
-    _save(db, current_user, result, now, displaced)
-    return _response(db, current_user, now, _at_risk(result, tasks), problems)
+    res = _apply_disruption(db, current_user, dis, payload.text)
+    res["interpreted"] = {"blocks": blocks, "caps": caps}  # shown in the UI for transparency
+    return res
