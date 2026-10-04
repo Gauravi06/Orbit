@@ -56,5 +56,35 @@ Two tables added beyond original spec, both deliberate decisions:
 - Daily feedback -> preference-extraction pipeline
 - All frontend screens (onboarding, timetable input, schedule view, disruption input)
 
+## 2026-10-05
+
+### Frontend Design Foundation — Built and Verified
+- **Philosophy**: Paper planner crossed with calm editorial magazine. Quiet, warm, human, zero SaaS dashboard bloat.
+- **Stack Constraint**: Vite + React in plain JS (no TS), plain CSS with CSS variables, react-router-dom. Zero UI component libraries (no Tailwind, MUI, Chakra, shadcn) for full aesthetic control.
+- **Typography**:
+  - Display & Headings: Fraunces (serif)
+  - Body & UI: Instrument Sans
+  - Times & Data Labels: JetBrains Mono
+  - Type scale variables: 12, 14, 16, 20, 28, 40 px.
+- **Theme Architecture**:
+  - Defined as `[data-theme="paper"]` and `[data-theme="ink"]` on `<html>`. Adding future themes requires only a new CSS block.
+  - `index.html` includes an inline script in `<head>` that maps OS scheme (`prefers-color-scheme`) and reads `localStorage` before React loads, preventing any flash of the wrong theme.
+  - `localStorage` operations are strictly guarded in `try/catch`.
+  - "Paper" theme: `--bg: #F4EFE6`, `--surface: #FBF8F2`, `--surface-2: #EDE6D8`, `--ink: #1F1B16`, `--ink-muted: #6B6258`, `--line: #DDD3C2`, terracotta `--accent: #B24322`, recovery `--sage: #536D58`.
+  - "Ink" theme: warm dark (not pure black/blue-grey): `--bg: #14120F`, `--surface: #1C1915`, `--surface-2: #25211C`, `--ink: #EFE8DA`, `--ink-muted: #A0968A`, `--line: #332E27`, `--accent: #E0875F`, `--sage: #8FAE93`.
+  - Muted brick `--error`: `#A33822` (Paper) / `#E87A6E` (Ink), reserved strictly for form validation, never for rescheduled work.
+  - **WCAG AA Compliance**: All text and background combinations verified to meet or exceed 4.5:1 contrast across all surfaces.
+- **Layout & Rules**:
+  - 4px spacing scale (`--space-1` through `--space-16`).
+  - Radii: 6px small, 12px medium. Full pills reserved exclusively for status tags (`--radius-tag`).
+  - Flat 1px borders and whitespace for separation. Soft shadows restricted to floating menus/dialogs (`--shadow-floating`).
+  - Consistent 1.5px stroke vector line icons; transitions 150-200ms ease-out respecting `prefers-reduced-motion`.
+- **Deliverables Completed**:
+  1. `frontend/index.html`: Preconnected fonts and no-flash theme initialization script.
+  2. `frontend/src/styles/tokens.css`: Complete token library for Paper and Ink.
+  3. `frontend/src/styles/base.css`: Reset, typography scale, keyboard focus rings, button variants, pill tags, form inputs with error states, and quiet card containers.
+  4. `frontend/src/theme/useTheme.js` & `frontend/src/components/ThemeToggle.jsx`: Keyboard-accessible toggle with 1.5px stroke SVG icons.
+  5. `frontend/src/pages/DesignGuide.jsx`: Interactive showcase at route `/design` displaying every color swatch, typography level, button, tag, input, card, and live theme switch.
+
 ### Next step
-Task CRUD (create/list/update tasks for the logged-in user) - simple, no rule engine or LLM involved. Unblocks Schedule generation, which unblocks the core demo flow. Rule engine design decisions need to be finalized before Schedule generation is implemented.
+Task CRUD (create/list/update tasks for the logged-in user) on the backend and initial task list view.

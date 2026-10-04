@@ -1,0 +1,355 @@
+@import './tokens.css';
+
+/* ==========================================================================
+   1. CSS Reset & Box Sizing
+   ========================================================================== */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  background-color: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  transition: background-color var(--transition-base), color var(--transition-base);
+}
+
+/* ==========================================================================
+   2. Typography
+   ========================================================================== */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display);
+  font-weight: var(--font-bold);
+  color: var(--ink);
+  line-height: var(--leading-tight);
+  letter-spacing: -0.015em;
+}
+
+h1 {
+  font-size: var(--text-xl); /* 40px */
+}
+
+h2 {
+  font-size: var(--text-lg); /* 28px */
+}
+
+h3 {
+  font-size: var(--text-md); /* 20px */
+  line-height: var(--leading-snug);
+}
+
+h4 {
+  font-size: var(--text-base); /* 16px */
+  font-weight: var(--font-semibold);
+  line-height: var(--leading-snug);
+}
+
+p {
+  color: var(--ink);
+  line-height: var(--leading-normal);
+}
+
+.text-display {
+  font-family: var(--font-display);
+}
+
+.text-mono,
+time,
+code,
+kbd,
+samp {
+  font-family: var(--font-mono);
+}
+
+code {
+  font-size: 0.9em;
+  padding: 2px 6px;
+  background-color: var(--surface-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+
+.text-muted {
+  color: var(--ink-muted);
+}
+
+.text-accent {
+  color: var(--accent);
+}
+
+.text-sage {
+  color: var(--sage);
+}
+
+.text-xs { font-size: var(--text-xs); }
+.text-sm { font-size: var(--text-sm); }
+.text-base { font-size: var(--text-base); }
+.text-md { font-size: var(--text-md); }
+.text-lg { font-size: var(--text-lg); }
+.text-xl { font-size: var(--text-xl); }
+
+a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: color var(--transition-fast), text-decoration-color var(--transition-fast);
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: var(--space-6) 0;
+}
+
+/* ==========================================================================
+   3. Accessible Focus Styles
+   ========================================================================== */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* ==========================================================================
+   4. Buttons
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  line-height: 1;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  background-color: transparent;
+  color: var(--ink);
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    background-color var(--transition-fast),
+    border-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* Primary Button: Solid terracotta */
+.btn-primary {
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  border-color: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+/* Secondary Button: Clean surface with quiet border */
+.btn-secondary {
+  background-color: var(--surface);
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+/* Ghost Button: Transparent background until hovered */
+.btn-ghost {
+  background-color: transparent;
+  color: var(--ink-muted);
+  border-color: transparent;
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--surface-2);
+  color: var(--ink);
+}
+
+/* ==========================================================================
+   5. Tags (Pills)
+   ========================================================================== */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  line-height: 1.2;
+  padding: 3px 10px;
+  border-radius: var(--radius-tag); /* Pill allowed for tags only */
+  border: 1px solid var(--line);
+  background-color: var(--surface-2);
+  color: var(--ink);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.tag-accent {
+  background-color: var(--surface);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.tag-sage {
+  background-color: var(--sage-bg);
+  border-color: var(--sage);
+  color: var(--sage);
+}
+
+/* ==========================================================================
+   6. Form Inputs & Validation
+   ========================================================================== */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+label {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  color: var(--ink);
+}
+
+.input,
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="search"],
+textarea,
+select {
+  width: 100%;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--ink);
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  transition:
+    border-color var(--transition-fast),
+    background-color var(--transition-fast);
+}
+
+.input::placeholder,
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-muted);
+}
+
+.input:focus,
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--accent);
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Error state: strictly for form validation only */
+.input-error,
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--error);
+  background-color: var(--error-bg);
+}
+
+.input-error:focus,
+input[aria-invalid="true"]:focus {
+  outline-color: var(--error);
+}
+
+.form-error {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--error);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+}
+
+/* ==========================================================================
+   7. Quiet Card
+   ========================================================================== */
+.card {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  padding: var(--space-6);
+  transition:
+    background-color var(--transition-base),
+    border-color var(--transition-base);
+}
+
+.card-header {
+  padding-bottom: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--line);
+}
+
+.card-footer {
+  padding-top: var(--space-4);
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* Floating elements (menus and dialogs only) */
+.floating-panel {
+  background-color: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-floating);
+}
