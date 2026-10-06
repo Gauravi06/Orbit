@@ -141,19 +141,106 @@ function buildScheduleItems(dateObj, version) {
   };
 }
 
-/* ---------- Mutable state ---------- */
+/* ---------- LocalStorage Persistence ---------- */
+const STORAGE_KEY_TASKS = 'orbit_mock_tasks';
+const STORAGE_KEY_SCHEDULES = 'orbit_mock_schedules';
+const STORAGE_KEY_PREFS = 'orbit_mock_preferences';
+const STORAGE_KEY_ONBOARDED = 'orbit_mock_onboarded';
+const STORAGE_KEY_NOTES = 'orbit_mock_notes';
 
-let tasks = JSON.parse(JSON.stringify(INITIAL_TASKS));
-let schedules = [buildScheduleItems(today, 1), buildScheduleItems(tomorrow, 1)];
-let preferences = {
-  wake_time: '07:00',
-  sleep_time: '23:30',
-  focus_length: 90,
-  prefer_long_sessions: true,
-  allow_splitting: true,
-  juggles: ['classes', 'gym', 'assignments'],
-};
-let onboarded = false;
+function loadStoredState() {
+  let loadedTasks = null;
+  let loadedSchedules = null;
+  let loadedPrefs = null;
+  let loadedOnboarded = null;
+
+  try {
+    const rawTasks = localStorage.getItem(STORAGE_KEY_TASKS);
+    if (rawTasks) loadedTasks = JSON.parse(rawTasks);
+  } catch { /* ignore */ }
+
+  try {
+    const rawSchedules = localStorage.getItem(STORAGE_KEY_SCHEDULES);
+    if (rawSchedules) loadedSchedules = JSON.parse(rawSchedules);
+  } catch { /* ignore */ }
+
+  try {
+    const rawPrefs = localStorage.getItem(STORAGE_KEY_PREFS);
+    if (rawPrefs) loadedPrefs = JSON.parse(rawPrefs);
+  } catch { /* ignore */ }
+
+  try {
+    const rawOnboarded = localStorage.getItem(STORAGE_KEY_ONBOARDED);
+    if (rawOnboarded !== null) loadedOnboarded = JSON.parse(rawOnboarded);
+  } catch { /* ignore */ }
+
+  return {
+    tasks: loadedTasks || JSON.parse(JSON.stringify(INITIAL_TASKS)),
+    schedules: loadedSchedules || [buildScheduleItems(today, 1), buildScheduleItems(tomorrow, 1)],
+    preferences: loadedPrefs || {
+      wake_time: '07:00',
+      sleep_time: '23:30',
+      focus_length: 90,
+      prefer_long_sessions: true,
+      allow_splitting: true,
+      juggles: ['classes', 'gym', 'assignments'],
+    },
+    onboarded: loadedOnboarded ?? false,
+  };
+}
+
+const initialState = loadStoredState();
+let tasks = initialState.tasks;
+let schedules = initialState.schedules;
+let preferences = initialState.preferences;
+let onboarded = initialState.onboarded;
+let notes = [];
+
+try {
+  const rawNotes = localStorage.getItem(STORAGE_KEY_NOTES);
+  if (rawNotes) notes = JSON.parse(rawNotes);
+} catch { /* ignore */ }
+
+function persistState() {
+  try {
+    localStorage.setItem(STORAGE_KEY_TASKS, JSON.stringify(tasks));
+  } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_SCHEDULES, JSON.stringify(schedules));
+  } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_PREFS, JSON.stringify(preferences));
+  } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_ONBOARDED, JSON.stringify(onboarded));
+  } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(notes));
+  } catch { /* ignore */ }
+}
+
+export function resetDemoState() {
+  try {
+    localStorage.removeItem(STORAGE_KEY_TASKS);
+    localStorage.removeItem(STORAGE_KEY_SCHEDULES);
+    localStorage.removeItem(STORAGE_KEY_PREFS);
+    localStorage.removeItem(STORAGE_KEY_ONBOARDED);
+    localStorage.removeItem(STORAGE_KEY_NOTES);
+  } catch { /* ignore */ }
+
+  tasks = JSON.parse(JSON.stringify(INITIAL_TASKS));
+  schedules = [buildScheduleItems(todayDate(), 1), buildScheduleItems(tomorrowDate(), 1)];
+  preferences = {
+    wake_time: '07:00',
+    sleep_time: '23:30',
+    focus_length: 90,
+    prefer_long_sessions: true,
+    allow_splitting: true,
+    juggles: ['classes', 'gym', 'assignments'],
+  };
+  onboarded = false;
+  notes = [];
+}
 
 /* ---------- Mock user ---------- */
 const mockUser = {
@@ -206,6 +293,7 @@ export async function createTask(data) {
     is_fixed: data.is_fixed || false,
   };
   tasks.push(task);
+  persistState();
   return task;
 }
 
@@ -229,6 +317,7 @@ export async function generateSchedule(date) {
   } else {
     schedules.push(newSchedule);
   }
+  persistState();
   return newSchedule;
 }
 
@@ -239,8 +328,11 @@ export async function disrupt(text, date) {
   const target = targetIdx >= 0 ? schedules[targetIdx] : schedules[0];
 
   if (!target) {
+    const fresh = buildScheduleItems(todayDate(), 1);
+    schedules.push(fresh);
+    persistState();
     return {
-      schedule: buildScheduleItems(todayDate(), 1),
+      schedule: fresh,
       what_changed: ['Generated a new schedule for today.'],
       at_risk: [],
     };
@@ -298,7 +390,7 @@ export async function disrupt(text, date) {
       reason: 'Pushed to tomorrow — make sure you have a free slot then.',
     });
   } else if (isExhausted) {
-    // Lighter schedule: remove Maths, shorten DBMS
+    // Lighter schedule: move Maths to tomorrow
     const mathsIdx = updated.items.findIndex((i) => i.title === 'Maths Revision');
     if (mathsIdx >= 0) {
       updated.items[mathsIdx].displaced_by_task_id = null;
@@ -351,6 +443,7 @@ export async function disrupt(text, date) {
   if (targetIdx >= 0) {
     schedules[targetIdx] = updated;
   }
+  persistState();
 
   return {
     schedule: updated,
@@ -377,6 +470,7 @@ export async function sendFeedback(text) {
           'Moved to your next deep-work block so you can recover tonight.';
         todaySchedule.items[mathsIdx].status = 'displaced';
       }
+      persistState();
     }
 
     return {
@@ -402,6 +496,120 @@ export async function sendFeedback(text) {
   };
 }
 
+/**
+ * Parses user input in "Tell Orbit anything" and classifies the note.
+ * Returns { kind, understood, message }.
+ * Does NOT apply changes or persist until saveNote() is called.
+ */
+export async function sendNote(text) {
+  await delay();
+  const lower = (text || '').toLowerCase();
+
+  const isExhausted = lower.includes('exhaust') ||
+                      lower.includes('tired') ||
+                      lower.includes('drained') ||
+                      lower.includes('burnout') ||
+                      lower.includes('sick');
+
+  if (isExhausted) {
+    return {
+      kind: 'feedback',
+      understood: 'You are feeling exhausted and need a lighter evening with work shifted to your next deep-work block.',
+      message: "That's completely okay. Everyone has days like that. I'll lighten your evening and move non-urgent work to your next deep-work block so you can rest.",
+    };
+  }
+
+  // Preference pattern (morning/evening, long/short blocks, quiet, sleep)
+  const isPref = lower.includes('prefer') ||
+                 lower.includes('like to study') ||
+                 lower.includes('morning') ||
+                 lower.includes('evening') ||
+                 lower.includes('always') ||
+                 lower.includes('never');
+
+  if (isPref) {
+    return {
+      kind: 'preference',
+      understood: `You want Orbit to remember this working preference: "${text.trim()}".`,
+      message: "Got it. I'll remember this preference for how you work best and keep it in mind when planning future days.",
+    };
+  }
+
+  // Task pattern (need to, have to, finish, assignment, homework, submit)
+  const isTask = lower.includes('need to') ||
+                 lower.includes('have to') ||
+                 lower.includes('finish') ||
+                 lower.includes('assignment') ||
+                 lower.includes('homework') ||
+                 lower.includes('submit') ||
+                 lower.includes('due');
+
+  if (isTask) {
+    return {
+      kind: 'task',
+      understood: `You have an upcoming commitment or task: "${text.trim()}".`,
+      message: "Understood. I will add this to your tasks and carve out dedicated focus time for it in your schedule.",
+    };
+  }
+
+  // General feedback / reflection
+  const isFeedback = lower.includes('felt') ||
+                     lower.includes('today') ||
+                     lower.includes('paced') ||
+                     lower.includes('too heavy') ||
+                     lower.includes('good') ||
+                     lower.includes('great') ||
+                     lower.includes('hard');
+
+  if (isFeedback) {
+    return {
+      kind: 'feedback',
+      understood: `You are sharing a reflection on today's pace and rhythm: "${text.trim()}".`,
+      message: "Thank you for the reflection. Orbit adapts future rhythms based on how sustainable your days feel.",
+    };
+  }
+
+  // Default general note
+  return {
+    kind: 'note',
+    understood: `You shared a note: "${text.trim()}".`,
+    message: "Noted. I'll keep this in mind as we organise your upcoming weeks.",
+  };
+}
+
+/**
+ * Persists the confirmed note and triggers schedule updates if exhausted/tired.
+ */
+export async function saveNote({ text, kind, rating }) {
+  await delay();
+  const entry = {
+    id: uid(),
+    text,
+    kind,
+    rating: rating || null,
+    created_at: new Date().toISOString(),
+  };
+  notes.push(entry);
+
+  const lower = (text || '').toLowerCase();
+  const isExhausted = lower.includes('exhaust') || lower.includes('tired') || lower.includes('sick');
+
+  if (isExhausted) {
+    const todaySchedule = schedules.find((s) => s.date === ymd(todayDate()));
+    if (todaySchedule) {
+      const mathsIdx = todaySchedule.items.findIndex((i) => i.title === 'Maths Revision' && i.status !== 'displaced');
+      if (mathsIdx >= 0) {
+        todaySchedule.items[mathsIdx].displacement_reason =
+          'Moved to your next deep-work block so you can recover tonight.';
+        todaySchedule.items[mathsIdx].status = 'displaced';
+      }
+    }
+  }
+
+  persistState();
+  return { success: true, entry };
+}
+
 export async function getPreferences() {
   await delay();
   return { ...preferences };
@@ -411,6 +619,7 @@ export async function savePreferences(prefs) {
   await delay();
   preferences = { ...preferences, ...prefs };
   onboarded = true;
+  persistState();
   return preferences;
 }
 
@@ -424,5 +633,6 @@ export async function saveOnboarding(answers) {
   if (answers.juggles) preferences.juggles = answers.juggles;
   if (answers.anything_else) preferences.anything_else = answers.anything_else;
   onboarded = true;
+  persistState();
   return preferences;
 }

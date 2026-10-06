@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Lock,
@@ -10,10 +10,15 @@ import {
   CornerDownRight,
   Plus,
   RefreshCw,
-  MessageSquare,
   AlertCircle,
+  BatteryLow,
+  BatteryMedium,
+  Zap,
+  Check,
+  X,
+  Loader2,
 } from 'lucide-react';
-import { getSchedule, generateSchedule, errText } from '../api/client';
+import { getSchedule, generateSchedule, sendNote, saveNote, errText } from '../api/client';
 import './Today.css';
 
 /* Helper functions for dates & times */
@@ -47,10 +52,30 @@ export function Today() {
   const [error, setError] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => ymd(new Date()));
 
+  // "Tell Orbit anything" note box state
+  const [energyRating, setEnergyRating] = useState('just_right'); // 'too_heavy' | 'just_right' | 'extra_energy'
+  const [noteText, setNoteText] = useState('');
+  const [noteLoading, setNoteLoading] = useState(false);
+  const [confirmCard, setConfirmCard] = useState(null); // { kind, understood, message, rawText, rating }
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
+
   // Load schedule for selected date asynchronously
+  const fetchSchedule = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const data = await getSchedule(selectedDate);
+      setSchedule(data);
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedDate]);
+
   useEffect(() => {
     let active = true;
-    const fetchSchedule = async () => {
+    const load = async () => {
       setLoading(true);
       setError('');
       try {
@@ -62,7 +87,7 @@ export function Today() {
         if (active) setLoading(false);
       }
     };
-    fetchSchedule();
+    load();
     return () => {
       active = false;
     };
@@ -79,6 +104,57 @@ export function Today() {
     } finally {
       setGenerating(false);
     }
+  };
+
+  // Note understanding submission
+  const handleNoteSubmit = async (e) => {
+    e.preventDefault();
+    if (!noteText.trim()) return;
+
+    setNoteLoading(true);
+    setError('');
+    setSaveSuccessMessage('');
+    try {
+      const understoodData = await sendNote(noteText.trim());
+      setConfirmCard({
+        kind: understoodData.kind,
+        understood: understoodData.understood,
+        message: understoodData.message,
+        rawText: noteText.trim(),
+        rating: energyRating,
+      });
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setNoteLoading(false);
+    }
+  };
+
+  // Confirm Save action
+  const handleConfirmSave = async () => {
+    if (!confirmCard) return;
+    setNoteLoading(true);
+    setError('');
+    try {
+      await saveNote({
+        text: confirmCard.rawText,
+        kind: confirmCard.kind,
+        rating: confirmCard.rating,
+      });
+      setSaveSuccessMessage(confirmCard.message || 'Saved to your planner.');
+      setConfirmCard(null);
+      setNoteText('');
+      await fetchSchedule();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setNoteLoading(false);
+    }
+  };
+
+  // Reject / Not quite action
+  const handleCancelConfirm = () => {
+    setConfirmCard(null);
   };
 
   // Day tabs (Today, Tomorrow, +2 days)
@@ -288,20 +364,119 @@ export function Today() {
         </div>
       )}
 
-      {/* Daily Feedback prompt footer */}
-      <div className="today-feedback-banner">
-        <div>
-          <div style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)', marginBottom: '2px' }}>
-            Daily Reflection
-          </div>
-          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
-            How did your schedule feel today? Orbit adapts future rhythms based on your energy.
-          </div>
+      {/* "Tell Orbit anything" Note Box */}
+      <div className="today-note-card">
+        <h2 className="today-note-title">Tell Orbit anything</h2>
+
+        {/* 3 optional quick taps */}
+        <div className="today-quick-taps">
+          <button
+            type="button"
+            className={`today-quick-btn ${energyRating === 'too_heavy' ? 'active' : ''}`}
+            onClick={() => setEnergyRating(energyRating === 'too_heavy' ? '' : 'too_heavy')}
+          >
+            <BatteryLow size={15} strokeWidth={1.5} />
+            <span>Too heavy</span>
+          </button>
+          <button
+            type="button"
+            className={`today-quick-btn ${energyRating === 'just_right' ? 'active' : ''}`}
+            onClick={() => setEnergyRating(energyRating === 'just_right' ? '' : 'just_right')}
+          >
+            <BatteryMedium size={15} strokeWidth={1.5} />
+            <span>Just right</span>
+          </button>
+          <button
+            type="button"
+            className={`today-quick-btn ${energyRating === 'extra_energy' ? 'active' : ''}`}
+            onClick={() => setEnergyRating(energyRating === 'extra_energy' ? '' : 'extra_energy')}
+          >
+            <Zap size={15} strokeWidth={1.5} />
+            <span>Extra energy</span>
+          </button>
         </div>
-        <Link to="/changed" className="btn btn-secondary" style={{ fontSize: 'var(--text-xs)' }}>
-          <MessageSquare size={13} strokeWidth={1.5} />
-          <span>Reflect on Today</span>
-        </Link>
+
+        {/* Note Input Form */}
+        <form onSubmit={handleNoteSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <textarea
+            className="input today-note-textarea"
+            rows={3}
+            placeholder="What worked today, what didn't, or anything Orbit should know about how you work."
+            value={noteText}
+            onChange={(e) => setNoteText(e.target.value)}
+            disabled={noteLoading || !!confirmCard}
+          />
+
+          {!confirmCard && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                className="btn btn-secondary"
+                disabled={noteLoading || !noteText.trim()}
+              >
+                {noteLoading ? (
+                  <>
+                    <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                    <span>Listening…</span>
+                  </>
+                ) : (
+                  <span>Send to Orbit</span>
+                )}
+              </button>
+            </div>
+          )}
+        </form>
+
+        {/* Small Confirm Card: Nothing is saved until the user taps Save */}
+        {confirmCard && (
+          <div className="today-confirm-card" role="region" aria-label="Confirm Note">
+            <div className="today-confirm-header">
+              <span className="tag tag-accent" style={{ textTransform: 'capitalize' }}>
+                {confirmCard.kind}
+              </span>
+              <span className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+                Please confirm
+              </span>
+            </div>
+            <p className="today-confirm-sentence">{confirmCard.understood}</p>
+            <div className="today-confirm-actions">
+              <button
+                type="button"
+                className="btn btn-ghost"
+                onClick={handleCancelConfirm}
+                disabled={noteLoading}
+              >
+                <X size={14} strokeWidth={1.5} />
+                <span>Not quite</span>
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleConfirmSave}
+                disabled={noteLoading}
+              >
+                {noteLoading ? (
+                  <>
+                    <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                    <span>Saving…</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={14} strokeWidth={1.5} />
+                    <span>Save</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Success message banner after save */}
+        {saveSuccessMessage && (
+          <div className="today-note-feedback" role="status">
+            <span>{saveSuccessMessage}</span>
+          </div>
+        )}
       </div>
     </div>
   );

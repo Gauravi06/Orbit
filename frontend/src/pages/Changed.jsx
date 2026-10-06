@@ -1,37 +1,20 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Sparkles,
   ArrowRight,
   CheckCircle2,
   AlertTriangle,
   RotateCcw,
   Loader2,
-  BatteryLow,
-  BatteryMedium,
-  Zap,
-  HeartHandshake,
 } from 'lucide-react';
-import { disrupt, sendFeedback, generateSchedule, errText } from '../api/client';
+import { disrupt, generateSchedule, errText } from '../api/client';
 import './Changed.css';
-
-const EXAMPLE_PROMPTS = [
-  'Professor announced an OS practical tomorrow',
-  'I am sick and exhausted, need a lighter evening',
-  'Lab ran 2 hours late today',
-];
 
 export function Changed() {
   const [promptText, setPromptText] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
-
-  // Daily feedback state
-  const [energyRating, setEnergyRating] = useState('just_right');
-  const [feedbackText, setFeedbackText] = useState('');
-  const [feedbackLoading, setFeedbackLoading] = useState(false);
-  const [feedbackResponse, setFeedbackResponse] = useState(null);
 
   const navigate = useNavigate();
 
@@ -66,22 +49,6 @@ export function Changed() {
     }
   };
 
-  const handleFeedbackSubmit = async (e) => {
-    e.preventDefault();
-    if (!feedbackText.trim() && !energyRating) return;
-
-    setFeedbackLoading(true);
-    try {
-      const text = `${feedbackText} (Felt: ${energyRating})`;
-      const res = await sendFeedback(text);
-      setFeedbackResponse(res.message);
-    } catch (err) {
-      setError(errText(err));
-    } finally {
-      setFeedbackLoading(false);
-    }
-  };
-
   return (
     <div className="changed-page">
       {/* Header */}
@@ -112,32 +79,11 @@ export function Changed() {
         >
           <textarea
             className="input changed-textarea"
-            placeholder='e.g. "Professor announced an OS practical tomorrow" or "Family dinner tonight"'
+            placeholder="What changed?"
             value={promptText}
             onChange={(e) => setPromptText(e.target.value)}
             disabled={loading}
           />
-
-          <div>
-            <div className="changed-chips-label">OR TAP AN EXAMPLE:</div>
-            <div className="changed-chips">
-              {EXAMPLE_PROMPTS.map((prompt) => (
-                <button
-                  key={prompt}
-                  type="button"
-                  className="changed-chip-btn"
-                  onClick={() => {
-                    setPromptText(prompt);
-                    handleDisrupt(prompt);
-                  }}
-                  disabled={loading}
-                >
-                  <Sparkles size={12} strokeWidth={1.5} />
-                  <span>{prompt}</span>
-                </button>
-              ))}
-            </div>
-          </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
             <button
@@ -249,76 +195,6 @@ export function Changed() {
           </div>
         </div>
       )}
-
-      {/* Daily Feedback Section */}
-      <div className="changed-card">
-        <h2 className="changed-card-title">Daily Energy Reflection</h2>
-        <p className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>
-          Let Orbit know how sustainable today felt. Future plans adjust to prevent burnout.
-        </p>
-
-        <form onSubmit={handleFeedbackSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
-          <div>
-            <label style={{ marginBottom: 'var(--space-2)' }}>Today's workload felt:</label>
-            <div className="feedback-rating-row">
-              <button
-                type="button"
-                className={`feedback-rating-btn ${energyRating === 'too_heavy' ? 'active' : ''}`}
-                onClick={() => setEnergyRating('too_heavy')}
-              >
-                <BatteryLow size={18} strokeWidth={1.5} />
-                <span>Too heavy</span>
-              </button>
-              <button
-                type="button"
-                className={`feedback-rating-btn ${energyRating === 'just_right' ? 'active' : ''}`}
-                onClick={() => setEnergyRating('just_right')}
-              >
-                <BatteryMedium size={18} strokeWidth={1.5} />
-                <span>Just right</span>
-              </button>
-              <button
-                type="button"
-                className={`feedback-rating-btn ${energyRating === 'extra_energy' ? 'active' : ''}`}
-                onClick={() => setEnergyRating('extra_energy')}
-              >
-                <Zap size={18} strokeWidth={1.5} />
-                <span>Extra energy</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="feedback-text">What worked today, and what didn't?</label>
-            <textarea
-              id="feedback-text"
-              rows={3}
-              className="input"
-              placeholder='e.g. "I couldn&apos;t study yesterday, I was exhausted" or "Loved the 90m block"'
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-            />
-          </div>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button
-              type="submit"
-              className="btn btn-secondary"
-              disabled={feedbackLoading || (!feedbackText.trim() && !energyRating)}
-            >
-              {feedbackLoading ? 'Logging…' : 'Save Daily Reflection'}
-            </button>
-          </div>
-        </form>
-
-        {/* Gentle response message */}
-        {feedbackResponse && (
-          <div className="feedback-response-box" role="status">
-            <HeartHandshake size={18} strokeWidth={1.5} style={{ color: 'var(--sage)', flexShrink: 0 }} />
-            <div>{feedbackResponse}</div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }

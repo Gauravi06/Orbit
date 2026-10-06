@@ -5,6 +5,8 @@ import { login, signup, errText } from '../api/client';
 import ThemeToggle from '../components/ThemeToggle';
 import './Login.css';
 
+const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+
 export function Login() {
   const [isSignup, setIsSignup] = useState(false);
   const [formData, setFormData] = useState({
@@ -219,16 +221,18 @@ export function Login() {
             </button>
           </div>
 
-          <div className="auth-demo-hint">
-            <span>Instant demo credentials:</span>
-            <button
-              type="button"
-              className="auth-demo-btn"
-              onClick={handleDemoFill}
-            >
-              Fill Demo: demo@orbit.app / password123
-            </button>
-          </div>
+          {IS_MOCK && (
+            <div className="auth-demo-hint">
+              <span>Instant demo credentials:</span>
+              <button
+                type="button"
+                className="auth-demo-btn"
+                onClick={handleDemoFill}
+              >
+                Fill Demo: demo@orbit.app / password123
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

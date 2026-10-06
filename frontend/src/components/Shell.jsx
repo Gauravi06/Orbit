@@ -8,9 +8,14 @@ import {
   LogOut,
   Sliders,
   ChevronDown,
+  RotateCcw,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
+import { resetDemo } from '../api/client';
 import './Shell.css';
+
+const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
+const IS_DEV = import.meta.env.DEV;
 
 export function Shell({ children }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -23,6 +28,12 @@ export function Shell({ children }) {
       localStorage.removeItem('token');
     } catch { /* ignore */ }
     navigate('/login');
+  };
+
+  const handleResetDemo = async () => {
+    await resetDemo();
+    setMenuOpen(false);
+    window.location.reload();
   };
 
   // Close dropdown on outside click
@@ -75,15 +86,17 @@ export function Shell({ children }) {
               <CheckSquare size={15} strokeWidth={1.5} />
               <span>Tasks</span>
             </NavLink>
-            <NavLink
-              to="/design"
-              className={({ isActive }) =>
-                `shell-nav-link ${isActive ? 'active' : ''}`
-              }
-            >
-              <Palette size={15} strokeWidth={1.5} />
-              <span>Design</span>
-            </NavLink>
+            {IS_DEV && (
+              <NavLink
+                to="/design"
+                className={({ isActive }) =>
+                  `shell-nav-link ${isActive ? 'active' : ''}`
+                }
+              >
+                <Palette size={15} strokeWidth={1.5} />
+                <span>Design</span>
+              </NavLink>
+            )}
           </nav>
 
           {/* Right actions: ThemeToggle + User Menu */}
@@ -112,14 +125,26 @@ export function Shell({ children }) {
                     <Sliders size={13} strokeWidth={1.5} />
                     <span>Preferences</span>
                   </Link>
-                  <Link
-                    to="/design"
-                    className="shell-dropdown-item"
-                    onClick={() => setMenuOpen(false)}
-                  >
-                    <Palette size={13} strokeWidth={1.5} />
-                    <span>Design Guide</span>
-                  </Link>
+                  {IS_DEV && (
+                    <Link
+                      to="/design"
+                      className="shell-dropdown-item"
+                      onClick={() => setMenuOpen(false)}
+                    >
+                      <Palette size={13} strokeWidth={1.5} />
+                      <span>Design Guide</span>
+                    </Link>
+                  )}
+                  {IS_MOCK && (
+                    <button
+                      type="button"
+                      className="shell-dropdown-item"
+                      onClick={handleResetDemo}
+                    >
+                      <RotateCcw size={13} strokeWidth={1.5} />
+                      <span>Reset demo</span>
+                    </button>
+                  )}
                   <div className="shell-dropdown-divider" />
                   <button
                     type="button"
@@ -168,15 +193,17 @@ export function Shell({ children }) {
           <CheckSquare size={18} strokeWidth={1.5} />
           <span>Tasks</span>
         </NavLink>
-        <NavLink
-          to="/design"
-          className={({ isActive }) =>
-            `shell-mobile-link ${isActive ? 'active' : ''}`
-          }
-        >
-          <Palette size={18} strokeWidth={1.5} />
-          <span>Design</span>
-        </NavLink>
+        {IS_DEV && (
+          <NavLink
+            to="/design"
+            className={({ isActive }) =>
+              `shell-mobile-link ${isActive ? 'active' : ''}`
+            }
+          >
+            <Palette size={18} strokeWidth={1.5} />
+            <span>Design</span>
+          </NavLink>
+        )}
       </nav>
     </div>
   );

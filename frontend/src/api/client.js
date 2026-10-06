@@ -144,6 +144,35 @@ export async function sendFeedback(text) {
   return data;
 }
 
+/* ---------- Notes / Tell Orbit Anything ---------- */
+
+export async function sendNote(text) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.sendNote(text);
+  }
+  const { data } = await http.post('/notes/understand', { text });
+  return data;
+}
+
+export async function saveNote({ text, kind, rating }) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.saveNote({ text, kind, rating });
+  }
+  const { data } = await http.post('/notes', { text, kind, rating });
+  return data;
+}
+
+export async function resetDemo() {
+  if (USE_MOCK) {
+    const m = await mock();
+    m.resetDemoState();
+    return { success: true };
+  }
+  return { success: true };
+}
+
 /* ---------- Preferences ---------- */
 
 export async function getPreferences() {

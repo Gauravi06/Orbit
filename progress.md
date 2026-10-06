@@ -97,3 +97,7 @@ Two tables added beyond original spec, both deliberate decisions:
 
 ### Next step
 Backend integration for schedule rule engine and live FastAPI endpoints to replace mock layer.
+
+## 2026-10-06 — Frontend Cleanup (Phase 1)
+- Cleaned /changed screen to single prompt, moved feedback to Today page under "Tell Orbit anything" with 2-step confirmation and sendNote().
+- Secured dev-only /design access, restricted Fill Demo to mock mode, and persisted mock data to localStorage with reset action.

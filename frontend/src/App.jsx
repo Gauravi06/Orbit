@@ -29,7 +29,7 @@ export function App() {
       <Routes>
         {/* Public Routes */}
         <Route path="/login" element={<Login />} />
-        <Route path="/design" element={<DesignGuide />} />
+        {import.meta.env.DEV && <Route path="/design" element={<DesignGuide />} />}
 
         {/* Protected App Routes */}
         <Route
