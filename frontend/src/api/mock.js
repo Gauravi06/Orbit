@@ -8,6 +8,9 @@
  * Shape contracts match the FastAPI backend exactly.
  */
 
+import { parseTaskSemantics } from './semanticParser.js';
+export { parseTaskSemantics, parseTaskSemanticsAsync } from './semanticParser.js';
+
 /* ---------- helpers ---------- */
 let _id = 1000;
 const uid = () => ++_id;
@@ -58,6 +61,227 @@ let schedules = [];
 let onboarded = false;
 let notes = [];
 
+const CURRENT_SCHEDULER_VERSION = '2026.10.balanced_v7_live';
+
+function inferTaskMeta(task) {
+  const title = (task.title || task.name || 'Untitled').trim();
+  const lowerTitle = title.toLowerCase();
+  const note = (task.natural_language_note || '').toLowerCase();
+
+  // If semantic_preferences is missing but natural_language_note exists, parse on the fly!
+  let semPref = task.semantic_preferences;
+  if ((!semPref || semPref.isEmpty) && task.natural_language_note) {
+    const parsed = parseTaskSemantics(task.natural_language_note, task);
+    semPref = parsed.isEmpty ? null : parsed;
+  }
+  semPref = semPref || {};
+
+  // Duration
+  const dur = Number(task.estimated_duration || task.duration || task.estimated_minutes || semPref.estimated_duration || 60);
+
+  // Frequency & isOneTime
+  // A task is a one-time deadline task if:
+  // - It has an explicit deadline property (deliverable with a due date)
+  // - Or frequency is explicitly 'one-time', 'one-off', 'once'
+  const freq = (task.frequency || semPref.frequency || '').toLowerCase().trim();
+  const hasDeadline = Boolean(task.deadline);
+  const isOneTime =
+    freq === 'one-time' ||
+    freq === 'one-off' ||
+    freq === 'once' ||
+    hasDeadline;
+
+  // Cognitive load / category
+  let load = 'medium'; // 'high' | 'medium' | 'low' | 'physical' | 'flexible'
+  if (
+    lowerTitle.includes('gym') ||
+    lowerTitle.includes('workout') ||
+    lowerTitle.includes('exercise') ||
+    lowerTitle.includes('swim') ||
+    lowerTitle.includes('run') ||
+    lowerTitle.includes('yoga')
+  ) {
+    load = 'physical';
+  } else if (
+    lowerTitle.includes('journal') ||
+    lowerTitle.includes('plan') ||
+    lowerTitle.includes('reflect') ||
+    lowerTitle.includes('email') ||
+    lowerTitle.includes('admin') ||
+    dur <= 20
+  ) {
+    load = 'low';
+  } else if (
+    task.tier === 'have_to' ||
+    task.priority >= 4 ||
+    lowerTitle.includes('dsa') ||
+    lowerTitle.includes('exam') ||
+    lowerTitle.includes('assignment') ||
+    lowerTitle.includes('problem set') ||
+    lowerTitle.includes('project') ||
+    lowerTitle.includes('coding') ||
+    lowerTitle.includes('cat prep') ||
+    lowerTitle.includes('gate prep') ||
+    lowerTitle.includes('maths') ||
+    lowerTitle.includes('deep work') ||
+    lowerTitle.includes('practice')
+  ) {
+    load = 'high';
+  }
+
+  if (task.tier === 'like_to' || task.category === 'hobby' || task.category === 'personal') {
+    load = 'flexible';
+  }
+
+  // Preferred time of day from note / semantics
+  const prefTimes = Array.isArray(semPref.preferred_time) ? semPref.preferred_time : [];
+  let preferredTime = semPref.time_of_day || null;
+  if (prefTimes.includes('morning')) preferredTime = 'morning';
+  else if (prefTimes.includes('afternoon')) preferredTime = 'afternoon';
+  else if (prefTimes.includes('evening')) preferredTime = 'evening';
+
+  if (!preferredTime) {
+    if (note.includes('morning') || note.includes('early')) preferredTime = 'morning';
+    else if (note.includes('afternoon') || note.includes('midday')) preferredTime = 'afternoon';
+    else if (note.includes('evening') || note.includes('night') || note.includes('late')) preferredTime = 'evening';
+  }
+
+  // Habits usually prefer morning/evening
+  if (!preferredTime && load === 'physical') {
+    preferredTime = 'morning';
+  }
+  if (!preferredTime && load === 'low') {
+    preferredTime = 'evening';
+  }
+
+  return {
+    id: task.id,
+    title,
+    duration: dur,
+    tier: task.tier || (task.priority >= 4 ? 'have_to' : task.priority === 3 ? 'need_to' : 'like_to'),
+    kind: load === 'high' ? 'deep' : load === 'physical' ? 'short' : load === 'flexible' ? 'short' : 'short',
+    load,
+    frequency: freq || 'One-time',
+    isOneTime,
+    days: task.days || task.day || task.weekday || null,
+    deadline: task.deadline || null,
+    done: Boolean(task.done),
+    preferredTime,
+    natural_language_note: task.natural_language_note || null,
+    semantic_preferences: semPref,
+  };
+}
+
+/**
+ * Calculates target scheduled date string(s) for a one-time deadline task across the week horizon.
+ */
+function getOneTimeTargetDates(taskMeta, baseDateObj) {
+  const dur = taskMeta.duration;
+  const today = todayDate();
+  const todayStr = ymd(today);
+
+  // If explicit day was set (e.g. Wednesday)
+  if (taskMeta.days && typeof taskMeta.days === 'string') {
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const targetDayIdx = dayNames.indexOf(taskMeta.days.toLowerCase().trim());
+    if (targetDayIdx >= 0) {
+      const currentDayOfWeek = today.getDay();
+      const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+      const monday = addDays(today, monDiff);
+      const dDiff = (targetDayIdx === 0 ? 7 : targetDayIdx) - 1;
+      const candidate = ymd(addDays(monday, dDiff));
+      return [{ dateStr: candidate, duration: dur }];
+    }
+  }
+
+  // Determine max single session length based on focus length (default ~60-90m)
+  const focusLen = Number(preferences.focus_length) || (preferences.focus_style === 'short' ? 45 : preferences.focus_style === 'long' ? 90 : 60);
+  const maxSession = Math.max(45, Math.min(90, focusLen));
+
+  // Splitting logic guided by semantic preferences and focus length
+  const semPref = taskMeta.semantic_preferences || {};
+  const wantsSplit = semPref.split_preference;
+  const requestedCount = semPref.preferred_session_count;
+
+  const shouldSplit = (dur > maxSession && preferences.allow_splitting !== false && wantsSplit !== false) ||
+                      (wantsSplit === true && dur >= 30);
+
+  if (taskMeta.deadline) {
+    const deadlineDateStr = taskMeta.deadline.split('T')[0];
+    const deadlineDate = new Date(deadlineDateStr + 'T00:00:00');
+
+    if (shouldSplit) {
+      let numSessions;
+      if (requestedCount && requestedCount >= 2) {
+        numSessions = Math.min(4, Math.max(2, requestedCount));
+      } else {
+        numSessions = Math.min(4, Math.max(2, Math.ceil(dur / maxSession)));
+      }
+      const sessionDur = Math.round(dur / numSessions);
+
+      // Available days from today up to the deadline day (inclusive)
+      const dDays = Math.max(1, Math.round((deadlineDate.getTime() - today.getTime()) / (24 * 3600 * 1000)));
+      const maxOffset = Math.min(6, dDays);
+      const candidateDates = [];
+
+      // Spacing preference
+      const forceConsecutive = semPref.spacing_preference === 'consecutive';
+      if (!forceConsecutive && maxOffset + 1 >= numSessions * 2 - 1) {
+        const startOffset = (maxOffset + 1 > numSessions * 2) ? 1 : 0;
+        for (let s = 0; s < numSessions; s++) {
+          const off = Math.min(maxOffset, startOffset + s * 2);
+          candidateDates.push(ymd(addDays(today, off)));
+        }
+      } else {
+        const step = maxOffset / Math.max(1, numSessions - 1);
+        for (let s = 0; s < numSessions; s++) {
+          const off = Math.min(maxOffset, Math.round(s * step));
+          candidateDates.push(ymd(addDays(today, off)));
+        }
+      }
+
+      // Ensure sum equals exact duration
+      const result = [];
+      let rem = dur;
+      for (let s = 0; s < numSessions; s++) {
+        const chunk = s === numSessions - 1 ? rem : sessionDur;
+        rem -= chunk;
+        result.push({ dateStr: candidateDates[s] || ymd(deadlineDate), duration: chunk });
+      }
+      return result;
+    }
+
+    // Small or medium task (<= maxSession): distribute between today and deadline
+    const hash = (taskMeta.title || '').split('').reduce((acc, c) => acc + c.charCodeAt(0), 0);
+    const dDays = Math.max(0, Math.round((deadlineDate.getTime() - today.getTime()) / (24 * 3600 * 1000)));
+    const targetOffset = dDays === 0 ? 0 : (hash % (dDays + 1));
+    const targetDate = addDays(today, targetOffset);
+    const targetDateStr = ymd(targetDate <= deadlineDate ? targetDate : deadlineDate);
+    return [{ dateStr: targetDateStr, duration: dur }];
+  }
+
+  // No deadline: one-time task
+  if (shouldSplit) {
+    let numSessions = requestedCount && requestedCount >= 2 ? Math.min(4, requestedCount) : Math.min(4, Math.ceil(dur / maxSession));
+    const sessionDur = Math.round(dur / numSessions);
+    const candidateDates = [];
+    for (let s = 0; s < numSessions; s++) {
+      candidateDates.push(ymd(addDays(today, s * 2)));
+    }
+    const result = [];
+    let rem = dur;
+    for (let s = 0; s < numSessions; s++) {
+      const chunk = s === numSessions - 1 ? rem : sessionDur;
+      rem -= chunk;
+      result.push({ dateStr: candidateDates[s] || todayStr, duration: chunk });
+    }
+    return result;
+  }
+
+  // Single one-time task without deadline: schedule directly on today
+  return [{ dateStr: todayStr, duration: dur }];
+}
+
 function isTaskApplicableToDate(task, dateObj) {
   const dateStr = ymd(dateObj);
   const dayOfWeek = dateObj.getDay(); // 0 Sun, 1 Mon, 2 Tue, 3 Wed, 4 Thu, 5 Fri, 6 Sat
@@ -65,11 +289,37 @@ function isTaskApplicableToDate(task, dateObj) {
   const dayName = dayNames[dayOfWeek];
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
-  // 1. Check explicit days array or string
-  const rawDays = task.days || task.day || task.weekday;
+  // If task is explicitly completed, do not schedule
+  if (task.done) {
+    return false;
+  }
+
+  // If task has a deadline and current date is strictly after deadline, do not schedule
+  if (task.deadline) {
+    const deadlineDateStr = task.deadline.split('T')[0];
+    if (dateStr > deadlineDateStr) {
+      return false;
+    }
+  }
+
+  const meta = inferTaskMeta(task);
+
+  // 1. One-time deadline tasks: check allocated target dates
+  if (meta.isOneTime) {
+    const targetAllocations = getOneTimeTargetDates(meta, dateObj);
+    return targetAllocations.some((alloc) => alloc.dateStr === dateStr);
+  }
+
+  // 2. Explicit days array or string for recurring tasks
+  const rawDays = meta.days;
   if (rawDays) {
+    const dayAbbr = dayName.toLowerCase().slice(0, 3);
     if (Array.isArray(rawDays) && rawDays.length > 0) {
-      return rawDays.some((d) => typeof d === 'string' && d.toLowerCase().trim() === dayName.toLowerCase());
+      return rawDays.some((d) => {
+        if (typeof d !== 'string') return false;
+        const dl = d.toLowerCase().trim();
+        return dl === dayName.toLowerCase() || dl === dayAbbr;
+      });
     }
     if (typeof rawDays === 'string' && rawDays.trim()) {
       const dLower = rawDays.toLowerCase().trim();
@@ -77,41 +327,31 @@ function isTaskApplicableToDate(task, dateObj) {
       if (dLower === 'weekdays' || dLower === 'monday–friday' || dLower === 'monday-friday' || dLower === 'weekdays only') return !isWeekend;
       if (dLower === 'weekends' || dLower === 'weekends only') return isWeekend;
       if (dLower === dayName.toLowerCase() || dLower.includes(dayName.toLowerCase())) return true;
+      const tokens = dLower.split(/[\s,–\-/]+/).map((t) => t.trim());
+      if (tokens.includes(dayAbbr) || dLower.includes(dayAbbr)) return true;
       return false;
     }
   }
 
-  // 2. Check frequency
-  const freq = (task.frequency || '').toLowerCase().trim();
-  if (freq) {
-    if (freq === 'daily' || freq === 'every day') return true;
-    if (freq === 'weekdays' || freq === 'monday–friday' || freq === 'monday-friday' || freq === 'weekdays only') return !isWeekend;
-    if (freq === 'weekends' || freq === 'weekends only') return isWeekend;
-    if (freq === 'weekly' || freq === '1x a week' || freq === 'once a week') {
-      // If a specific day was not provided, schedule on Monday for consistency
-      return dayOfWeek === 1;
-    }
-    if (freq === '2x a week' || freq === 'twice a week') {
-      // Tuesday and Thursday
-      return dayOfWeek === 2 || dayOfWeek === 4;
-    }
-    if (freq === '2-3x a week' || freq === '3-4x a week' || freq === '3x a week') {
-      // Monday, Wednesday, Friday
-      return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5;
-    }
-    if (freq === 'regularly') {
-      return !isWeekend;
-    }
-    if (freq === dayName.toLowerCase()) return true;
+  // 3. Frequency check
+  const freq = meta.frequency.toLowerCase();
+  if (freq === 'daily' || freq === 'every day') return true;
+  if (freq === 'weekdays' || freq === 'monday–friday' || freq === 'monday-friday' || freq === 'weekdays only') return !isWeekend;
+  if (freq === 'weekends' || freq === 'weekends only') return isWeekend;
+  if (freq === 'weekly' || freq === '1x a week' || freq === 'once a week') {
+    return dayOfWeek === 1; // Default Monday if no day specified
   }
-
-  // 3. Check deadline (one-off tasks)
-  if (task.deadline) {
-    const deadlineDateStr = task.deadline.split('T')[0];
-    return deadlineDateStr === dateStr;
+  if (freq === '2x a week' || freq === 'twice a week') {
+    return dayOfWeek === 2 || dayOfWeek === 4; // Tue & Thu
   }
+  if (freq === '2-3x a week' || freq === '3-4x a week' || freq === '3x a week') {
+    return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5; // Mon, Wed, Fri
+  }
+  if (freq === 'regularly') {
+    return !isWeekend;
+  }
+  if (freq === dayName.toLowerCase()) return true;
 
-  // 4. Default: If no frequency or deadline is set, return true
   return true;
 }
 
@@ -132,19 +372,25 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
   const dayName = dayNames[dayOfWeek];
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
-  // Focus & behavioral preferences
-  const focusLen = Number(prefs.focus_length) || (prefs.focus_style === 'short' ? 40 : prefs.focus_style === 'long' ? 100 : 60);
-  const isShortFocus = prefs.focus_style === 'short' || focusLen <= 45;
-  const isLongFocus = prefs.focus_style === 'long' || focusLen >= 100;
-  const allowSplit = prefs.allow_splitting !== false || prefs.task_splitting === 'yes' || prefs.task_splitting === 'large';
-  const shouldSplit = allowSplit && (isShortFocus || prefs.task_initiation === 'tiny_step');
-
-  const breakMins = prefs.break_preference === 'frequent' ? 20 : prefs.break_preference === 'fewer_longer' ? 10 : 15;
-  const windDownMins = 30;
+  // Behavioral & Energy Preferences
+  const energyPeak = (prefs.energy || prefs.best_time_of_day || 'morning').toLowerCase();
+  const focusLen = Number(prefs.focus_length) || (prefs.focus_style === 'short' ? 45 : prefs.focus_style === 'long' ? 90 : 60);
+  const breakMins = prefs.break_preference === 'frequent' ? 20 : prefs.break_preference === 'fewer_longer' ? 25 : 15;
 
   const items = [];
 
-  const addBlock = ({ taskId, title, kind, tier, startMins, endMins, isFixed = false, displacementReason = null, status = 'scheduled' }) => {
+  const addBlock = ({
+    taskId = null,
+    title,
+    kind,
+    tier = 'need_to',
+    startMins,
+    endMins,
+    isFixed = false,
+    displacementReason = null,
+    suggestion = null,
+    status = 'scheduled',
+  }) => {
     const safeStart = Math.max(wakeMins, Math.min(sleepMins - 10, startMins));
     const safeEnd = Math.max(safeStart + 10, Math.min(sleepMins, endMins));
     if (safeEnd <= safeStart) return;
@@ -156,7 +402,7 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
 
     items.push({
       id: uid(),
-      task_id: taskId || null,
+      task_id: taskId,
       title,
       kind,
       tier,
@@ -167,29 +413,60 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
       done: false,
       displaced_by_task_id: null,
       displacement_reason: displacementReason,
+      suggestion,
       move_count: 0,
     });
   };
 
-  // 1. Filter fixed commitments for this day
-  const rawCommitments = Array.isArray(prefs.fixed_commitments) ? prefs.fixed_commitments : [];
-  const dayCommitments = rawCommitments.filter((c) => {
-    if (!c.days || c.days === 'Daily') return true;
-    if (c.days === 'Monday–Friday' || c.days === 'Weekdays') return !isWeekend;
-    if (c.days === 'Weekends') return isWeekend;
-    return c.days.toLowerCase() === dayName.toLowerCase();
+  // 1. Fixed Commitments and Buffers
+  const prefCommitments = Array.isArray(prefs.fixed_commitments) ? prefs.fixed_commitments : [];
+  const taskFixed = tasks.filter((t) => t.is_fixed).map((t) => ({
+    id: t.id,
+    name: t.title,
+    start_time: t.start_time || (t.deadline ? t.deadline.split('T')[1]?.slice(0, 5) : '09:00'),
+    end_time: t.end_time || '10:00',
+    commute_before: t.commute_before || 0,
+    commute_after: t.commute_after || 0,
+    days: t.days || 'Daily',
+  }));
+
+  const allRawCommitments = [...prefCommitments, ...taskFixed];
+  const seenCommSignatures = new Set();
+  const dedupedCommitments = [];
+  allRawCommitments.forEach((c) => {
+    const name = (c.name || c.title || '').trim();
+    const days = (c.days || 'Daily').trim();
+    const start = c.start_time || '';
+    const end = c.end_time || '';
+    const cBefore = Number(c.commute_before) || 0;
+    const cAfter = Number(c.commute_after) || 0;
+    const sig = `${name}|${days}|${start}|${end}|${cBefore}|${cAfter}`.toLowerCase();
+    if (name && !seenCommSignatures.has(sig)) {
+      seenCommSignatures.add(sig);
+      dedupedCommitments.push({ ...c, name, days, start_time: start, end_time: end, commute_before: cBefore, commute_after: cAfter });
+    }
   });
 
-  // Track unavailable intervals (including commute buffers)
+  const dayCommitments = dedupedCommitments.filter((c) => {
+    const dLower = (c.days || 'Daily').toLowerCase().trim();
+    if (!c.days || dLower === 'daily' || dLower === 'every day') return true;
+    if (dLower === 'monday–friday' || dLower === 'monday-friday' || dLower === 'weekdays' || dLower === 'weekdays only') return !isWeekend;
+    if (dLower === 'weekends' || dLower === 'weekends only') return isWeekend;
+    return dLower === dayName.toLowerCase() || dLower.includes(dayName.toLowerCase());
+  });
+
   const busyIntervals = [];
+  let totalFixedCommitmentMins = 0;
 
   dayCommitments.forEach((c) => {
     const cStart = parseTimeToMins(c.start_time);
     const cEnd = parseTimeToMins(c.end_time);
     const cBefore = Number(c.commute_before) || 0;
     const cAfter = Number(c.commute_after) || 0;
+    const cDuration = cEnd - cStart;
+    totalFixedCommitmentMins += cDuration;
 
-    // Add commute before if specified
+    // Commute before
     if (cBefore > 0 && cStart - cBefore >= wakeMins) {
       addBlock({
         taskId: null,
@@ -202,7 +479,7 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
       });
     }
 
-    // Add fixed commitment block
+    // Fixed commitment
     addBlock({
       taskId: null,
       title: c.name,
@@ -213,26 +490,109 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
       isFixed: true,
     });
 
-    // Add commute after if specified
-    if (cAfter > 0 && cEnd + cAfter <= sleepMins) {
+    // Commute after / Decompression buffer
+    const postBuffer = cAfter > 0 ? cAfter : (cDuration >= 180 ? 20 : 0);
+    if (postBuffer > 0 && cEnd + postBuffer <= sleepMins) {
       addBlock({
         taskId: null,
-        title: `Transition: ${c.name}`,
+        title: cAfter > 0 ? `Transition: ${c.name}` : `Buffer after ${c.name}`,
         kind: 'break',
         tier: 'have_to',
         startMins: cEnd,
-        endMins: cEnd + cAfter,
+        endMins: cEnd + postBuffer,
         isFixed: true,
       });
     }
 
     busyIntervals.push({
       start: Math.max(wakeMins, cStart - cBefore),
-      end: Math.min(sleepMins, cEnd + cAfter),
+      end: Math.min(sleepMins, cEnd + postBuffer),
     });
   });
 
-  // Sort & merge busy intervals
+  // 2. Human Meals (Nourishment & Routine)
+  const isSlotFree = (start, end) => {
+    return !busyIntervals.some((b) => Math.max(start, b.start) < Math.min(end, b.end));
+  };
+
+  // Breakfast (target ~08:00–08:45, 30–45m)
+  if (wakeMins <= 510) {
+    let bStart = Math.max(wakeMins + 15, 480); // ~08:00
+    let bEnd = bStart + 35;
+    if (isSlotFree(bStart, bEnd)) {
+      addBlock({
+        taskId: null,
+        title: 'Breakfast',
+        kind: 'routine',
+        tier: 'have_to',
+        startMins: bStart,
+        endMins: bEnd,
+        isFixed: true,
+      });
+      busyIntervals.push({ start: bStart, end: bEnd });
+    }
+  }
+
+  // Lunch (target ~12:15–13:00 or 12:30–13:15, 45m)
+  if (wakeMins <= 750 && sleepMins >= 810) {
+    let lStart = 750; // 12:30
+    let lEnd = 795;   // 13:15
+    if (!isSlotFree(lStart, lEnd)) {
+      if (isSlotFree(735, 780)) { lStart = 735; lEnd = 780; } // 12:15-13:00
+      else if (isSlotFree(800, 845)) { lStart = 800; lEnd = 845; } // 13:20-14:05
+    }
+    if (isSlotFree(lStart, lEnd)) {
+      addBlock({
+        taskId: null,
+        title: 'Lunch',
+        kind: 'routine',
+        tier: 'have_to',
+        startMins: lStart,
+        endMins: lEnd,
+        isFixed: true,
+      });
+      busyIntervals.push({ start: lStart, end: lEnd });
+    }
+  }
+
+  // Dinner (target ~19:30–20:15, 45m)
+  if (sleepMins >= 1230) {
+    let dStart = 1170; // 19:30
+    let dEnd = 1215;   // 20:15
+    if (!isSlotFree(dStart, dEnd)) {
+      if (isSlotFree(1140, 1185)) { dStart = 1140; dEnd = 1185; } // 19:00-19:45
+      else if (isSlotFree(1200, 1245)) { dStart = 1200; dEnd = 1245; } // 20:00-20:45
+    }
+    if (isSlotFree(dStart, dEnd)) {
+      addBlock({
+        taskId: null,
+        title: 'Dinner',
+        kind: 'routine',
+        tier: 'have_to',
+        startMins: dStart,
+        endMins: dEnd,
+        isFixed: true,
+      });
+      busyIntervals.push({ start: dStart, end: dEnd });
+    }
+  }
+
+  // Wind Down (30 min before bedtime)
+  const windDownStart = sleepMins - 30;
+  if (isSlotFree(windDownStart, sleepMins)) {
+    addBlock({
+      taskId: null,
+      title: 'Wind Down',
+      kind: 'decompression',
+      tier: 'like_to',
+      startMins: windDownStart,
+      endMins: sleepMins,
+      isFixed: true,
+    });
+    busyIntervals.push({ start: windDownStart, end: sleepMins });
+  }
+
+  // Merge busy intervals
   busyIntervals.sort((a, b) => a.start - b.start);
   const mergedBusy = [];
   for (const interval of busyIntervals) {
@@ -248,168 +608,264 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
     }
   }
 
-  // Calculate free intervals
+  // Compute available free intervals
   const availableSlots = [];
-  let currentPointer = wakeMins;
-  const latestWorkTime = sleepMins - windDownMins;
+  let currentPtr = wakeMins;
+  const latestWorkTime = sleepMins - 30;
 
   for (const b of mergedBusy) {
-    if (b.start > currentPointer) {
-      const freeStart = currentPointer;
+    if (b.start > currentPtr) {
+      const freeStart = currentPtr;
       const freeEnd = Math.min(latestWorkTime, b.start);
-      if (freeEnd - freeStart >= 10) {
+      if (freeEnd - freeStart >= 15) {
         availableSlots.push({ start: freeStart, end: freeEnd, duration: freeEnd - freeStart });
       }
     }
-    currentPointer = Math.max(currentPointer, b.end);
+    currentPtr = Math.max(currentPtr, b.end);
+  }
+  if (currentPtr < latestWorkTime && latestWorkTime - currentPtr >= 15) {
+    availableSlots.push({ start: currentPtr, end: latestWorkTime, duration: latestWorkTime - currentPtr });
   }
 
-  if (currentPointer < latestWorkTime && latestWorkTime - currentPointer >= 10) {
-    availableSlots.push({ start: currentPointer, end: latestWorkTime, duration: latestWorkTime - currentPointer });
+  // 3. Cognitive Load Budget
+  // After substantial fixed commitments, reduce cognitive study capacity!
+  let maxCognitiveStudyMins = 270; // Default 4.5 hours max
+  let maxHighCognitiveBlocks = 3;
+
+  if (totalFixedCommitmentMins >= 360) {
+    // Heavy fixed day (e.g. 6-8 hours Hospital Rotation / College)
+    maxCognitiveStudyMins = 120;
+    maxHighCognitiveBlocks = 2;
+  } else if (totalFixedCommitmentMins >= 180) {
+    // Moderate fixed day (e.g. 3-4 hours College)
+    maxCognitiveStudyMins = 210;
+    maxHighCognitiveBlocks = 3; // 1 substantial deep work + 1-2 smaller coursework
+  } else if (isWeekend) {
+    maxCognitiveStudyMins = prefs.weekend_mode === 'off' ? 60 : 180;
+    maxHighCognitiveBlocks = 2;
   }
 
-  // 2. Queue actual user-defined tasks respecting generic recurrence
-  const needToList = Array.isArray(prefs.need_to_items) ? prefs.need_to_items : [];
-  const shouldDoList = Array.isArray(prefs.should_do_items) ? prefs.should_do_items : [];
-  const likeToList = Array.isArray(prefs.like_to_items) ? prefs.like_to_items : [];
+  // 4. Queue Applicable User Tasks
+  const needToList = Array.isArray(prefs.need_to_items) ? prefs.need_to_items.map((i) => ({ ...i, tier: 'have_to' })) : [];
+  const shouldDoList = Array.isArray(prefs.should_do_items) ? prefs.should_do_items.map((i) => ({ ...i, tier: 'need_to' })) : [];
+  const likeToList = Array.isArray(prefs.like_to_items) ? prefs.like_to_items.map((i) => ({ ...i, tier: 'like_to' })) : [];
+  const standaloneTasks = tasks.filter((t) => !t.is_fixed);
 
-  const taskQueue = [];
+  const allRawTasks = [...standaloneTasks, ...needToList, ...shouldDoList, ...likeToList];
+  const seenTaskTitles = new Set();
+  const dedupedUserTasks = [];
+  allRawTasks.forEach((t) => {
+    const title = (t.title || t.name || '').trim();
+    if (title && !seenTaskTitles.has(title.toLowerCase())) {
+      seenTaskTitles.add(title.toLowerCase());
+      dedupedUserTasks.push(t);
+    }
+  });
 
-  needToList.forEach((item) => {
-    if (isTaskApplicableToDate(item, dateObj)) {
-      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 45 : isLongFocus ? 105 : 90);
-      taskQueue.push({
-        title: item.name,
-        tier: 'have_to',
-        kind: 'deep',
-        duration: dur,
+  const dailyTaskQueue = [];
+
+  dedupedUserTasks.forEach((t) => {
+    if (isTaskApplicableToDate(t, dateObj)) {
+      const meta = inferTaskMeta(t);
+      let effectiveDuration = meta.duration;
+      if (meta.isOneTime) {
+        const targets = getOneTimeTargetDates(meta, dateObj);
+        const match = targets.find((alloc) => alloc.dateStr === date);
+        if (match) {
+          effectiveDuration = match.duration;
+        }
+      }
+
+      dailyTaskQueue.push({
+        ...meta,
+        duration: effectiveDuration,
       });
     }
   });
 
-  shouldDoList.forEach((item) => {
-    if (isTaskApplicableToDate(item, dateObj)) {
-      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 35 : isLongFocus ? 90 : 60);
-      taskQueue.push({
-        title: item.name,
-        tier: 'need_to',
-        kind: 'deep',
-        duration: dur,
-      });
-    }
+  // Sort queue: Habits first, then High-Cognitive, Medium, Low, Flexible last
+  dailyTaskQueue.sort((a, b) => {
+    const loadWeight = { physical: 1, high: 2, medium: 3, low: 4, flexible: 5 };
+    return (loadWeight[a.load] || 3) - (loadWeight[b.load] || 3);
   });
 
-  likeToList.forEach((item) => {
-    if (isTaskApplicableToDate(item, dateObj)) {
-      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 30 : 45);
-      taskQueue.push({
-        title: item.name,
-        tier: 'like_to',
-        kind: 'short',
-        duration: dur,
-      });
+  let scheduledCognitiveMins = 0;
+  let scheduledHighCognitiveCount = 0;
+
+  for (const task of dailyTaskQueue) {
+    if (task.load === 'high') {
+      if (scheduledHighCognitiveCount >= maxHighCognitiveBlocks) continue;
+      if (scheduledCognitiveMins + task.duration > maxCognitiveStudyMins + 15) continue;
+    } else if (task.load === 'medium') {
+      if (scheduledCognitiveMins + task.duration > maxCognitiveStudyMins + 30) continue;
+    } else if (task.load === 'flexible') {
+      if (scheduledCognitiveMins >= maxCognitiveStudyMins - 30) continue;
     }
-  });
 
-  // Schedule queue into open slots
-  for (const slot of availableSlots) {
-    let slotPtr = slot.start;
-    const slotEnd = slot.end;
+    // Find best slot
+    let bestSlotIdx = -1;
+    let bestScore = -999;
 
-    while (taskQueue.length > 0 && slotPtr + 10 <= slotEnd) {
-      const task = taskQueue.shift();
-      const remainingSlot = slotEnd - slotPtr;
-      const taskDur = Math.min(task.duration, remainingSlot);
+    availableSlots.forEach((slot, idx) => {
+      if (slot.duration < Math.min(task.duration, 30)) return;
 
-      if (taskDur < 10) break;
+      let score = 10;
+      const slotMid = (slot.start + slot.end) / 2;
+      const isMorning = slotMid < 720;
+      const isAfternoon = slotMid >= 720 && slotMid < 1020;
+      const isEvening = slotMid >= 1020;
 
-      if (shouldSplit && taskDur >= 50 && task.tier !== 'like_to') {
-        const step1Dur = Math.round(taskDur * 0.4);
-        const step2Dur = taskDur - step1Dur - breakMins;
+      if (slot.duration >= task.duration) score += 25;
 
-        addBlock({
-          taskId: null,
-          title: `Start ${task.title}`,
-          kind: task.kind,
-          tier: task.tier,
-          startMins: slotPtr,
-          endMins: slotPtr + step1Dur,
-        });
-        slotPtr += step1Dur;
+      if (task.load === 'high') {
+        if (energyPeak === 'morning' && isMorning) score += 20;
+        if (energyPeak === 'afternoon' && isAfternoon) score += 20;
+        if (energyPeak === 'evening' && isEvening) score += 20;
+      }
 
-        if (step2Dur >= 20 && slotPtr + breakMins + step2Dur <= slotEnd) {
+      // Semantic preferences scoring
+      const semPref = task.semantic_preferences || {};
+      const prefTimes = Array.isArray(semPref.preferred_time) ? semPref.preferred_time : [];
+      const avoidTimes = Array.isArray(semPref.avoid_time) ? semPref.avoid_time : [];
+
+      const isPrefMorning = prefTimes.includes('morning') || task.preferredTime === 'morning';
+      const isPrefAfternoon = prefTimes.includes('afternoon') || task.preferredTime === 'afternoon';
+      const isPrefEvening = prefTimes.includes('evening') || task.preferredTime === 'evening';
+
+      const prefBonus = semPref.strength === 'required' ? 45 : 30;
+
+      if (isPrefMorning && isMorning) score += prefBonus;
+      if (isPrefAfternoon && isAfternoon) score += prefBonus;
+      if (isPrefEvening && isEvening) score += prefBonus;
+
+      if (task.load === 'physical' && (isMorning || isEvening)) score += 15;
+
+      // After fixed commitment (e.g. "after college", "after a break after clg")
+      if (semPref.after_commitment || prefTimes.includes('after_fixed_commitment_recovery') || prefTimes.includes('after_commitment')) {
+        const targetName = (semPref.after_commitment || 'college').toLowerCase();
+        const matchComm = dayCommitments.find((c) => (c.name || '').toLowerCase().includes(targetName));
+        if (matchComm) {
+          const commEnd = parseTimeToMins(matchComm.end_time) + (matchComm.commute_after || 0);
+          if (slot.start >= commEnd) {
+            score += 40;
+            // Extra bonus if scheduled within 2.5 hours of ending (ideal recovery focus window)
+            if (slot.start <= commEnd + 150) {
+              score += 15;
+            }
+          } else {
+            // Penalize slots before the commitment when user requested after
+            score -= 40;
+          }
+        }
+      }
+
+      // Before fixed commitment
+      if (semPref.before_commitment || prefTimes.includes('before_commitment')) {
+        const targetName = (semPref.before_commitment || 'college').toLowerCase();
+        const matchComm = dayCommitments.find((c) => (c.name || '').toLowerCase().includes(targetName));
+        if (matchComm) {
+          const commStart = parseTimeToMins(matchComm.start_time) - (matchComm.commute_before || 0);
+          if (slot.end <= commStart) {
+            score += 40;
+          } else {
+            score -= 40;
+          }
+        }
+      }
+
+      // Avoid last task of the day
+      if (semPref.avoid_last_task || avoidTimes.includes('last_task_of_day')) {
+        if (slot.end >= latestWorkTime - 60 || idx === availableSlots.length - 1) {
+          score -= 50;
+        }
+      }
+
+      // Avoid specific times
+      if (avoidTimes.includes('night') && slotMid >= 1260) score -= 50;
+      if (avoidTimes.includes('morning') && isMorning) score -= 50;
+      if (avoidTimes.includes('afternoon') && isAfternoon) score -= 50;
+      if (avoidTimes.includes('evening') && isEvening) score -= 50;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestSlotIdx = idx;
+      }
+    });
+
+    if (bestSlotIdx >= 0) {
+      const slot = availableSlots[bestSlotIdx];
+      const maxBlockLimit = Math.min(task.duration, focusLen);
+      const taskDur = Math.min(task.duration, Math.min(slot.duration, maxBlockLimit));
+
+      addBlock({
+        taskId: task.id || null,
+        title: task.title,
+        kind: task.kind,
+        tier: task.tier,
+        startMins: slot.start,
+        endMins: slot.start + taskDur,
+      });
+
+      slot.start += taskDur;
+      slot.duration -= taskDur;
+
+      if (task.load === 'high') {
+        scheduledHighCognitiveCount++;
+        scheduledCognitiveMins += taskDur;
+
+        // Insert 15m recovery buffer if remaining slot has space
+        if (slot.duration >= breakMins) {
           addBlock({
             taskId: null,
-            title: 'Rest & Pause',
+            title: 'Recovery Buffer',
             kind: 'break',
             tier: 'like_to',
-            startMins: slotPtr,
-            endMins: slotPtr + breakMins,
+            startMins: slot.start,
+            endMins: slot.start + breakMins,
+            isFixed: true,
           });
-          slotPtr += breakMins;
-
-          addBlock({
-            taskId: null,
-            title: `${task.title} (Deep Work)`,
-            kind: task.kind,
-            tier: task.tier,
-            startMins: slotPtr,
-            endMins: slotPtr + step2Dur,
-          });
-          slotPtr += step2Dur;
+          slot.start += breakMins;
+          slot.duration -= breakMins;
         }
-      } else {
-        addBlock({
-          taskId: null,
-          title: task.title,
-          kind: task.kind,
-          tier: task.tier,
-          startMins: slotPtr,
-          endMins: slotPtr + taskDur,
-        });
-        slotPtr += taskDur;
-      }
-
-      if (slotPtr + breakMins < slotEnd && taskQueue.length > 0) {
-        addBlock({
-          taskId: null,
-          title: 'Break',
-          kind: 'break',
-          tier: 'like_to',
-          startMins: slotPtr,
-          endMins: slotPtr + breakMins,
-        });
-        slotPtr += breakMins;
+      } else if (task.load === 'medium') {
+        scheduledCognitiveMins += taskDur;
       }
     }
   }
 
-  // 3. Add Wind Down before bedtime
-  const lastTaskEnd = items.length > 0
-    ? Math.max(...items.map((i) => {
-        const d = new Date(i.end_time);
-        return d.getHours() * 60 + d.getMinutes();
-      }))
-    : wakeMins;
+  // 5. Open Blocks: Transform all remaining continuous free windows >= 45m into Open Blocks
+  availableSlots.forEach((slot) => {
+    if (slot.duration >= 45) {
+      const mid = (slot.start + slot.end) / 2;
+      const isEvening = mid >= 1020;
+      const isMidday = mid >= 720 && mid < 1020;
 
-  const windDownStart = Math.max(lastTaskEnd, sleepMins - windDownMins);
-  if (windDownStart < sleepMins) {
-    addBlock({
-      taskId: null,
-      title: 'Wind Down',
-      kind: 'decompression',
-      tier: 'like_to',
-      startMins: windDownStart,
-      endMins: sleepMins,
-    });
-  }
+      const suggestion = isEvening
+        ? 'Use this time flexibly: catch up, spend time with friends or family, work on a preferred hobby, or simply decompress.'
+        : isMidday
+        ? 'Unstructured personal time: take a walk, read, recharge, or handle personal errands.'
+        : 'Open personal window: ease into your day, personal projects, or quiet reflection.';
 
-  // Sort chronologically
+      addBlock({
+        taskId: null,
+        title: 'Open Block',
+        kind: 'open',
+        tier: 'like_to',
+        startMins: slot.start,
+        endMins: slot.end,
+        isFixed: true,
+        suggestion,
+      });
+    }
+  });
+
+  // Chronological sort
   items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   return {
     id: uid(),
     date,
+    scheduler_version: CURRENT_SCHEDULER_VERSION,
     version: version || 1,
     is_closed: false,
     closed_at: null,
@@ -434,16 +890,10 @@ function buildSeedPastDays() {
     if (isPast) {
       sched.is_closed = true;
       sched.closed_at = isoTime(d, 23, 30);
-      // Mark items as done or moved for demo realism
-      sched.items.forEach((item, idx) => {
+      // Mark past items as done for demo realism without fake displacement reasons
+      sched.items.forEach((item) => {
         if (!item.is_fixed) {
-          if (idx % 4 === 0) {
-            item.done = false;
-            item.status = 'displaced';
-            item.displacement_reason = `Left from ${d.toLocaleDateString('en-US', { weekday: 'long' })}, so I put it here.`;
-          } else {
-            item.done = true;
-          }
+          item.done = true;
         }
       });
     }
@@ -459,7 +909,7 @@ const STORAGE_KEY_PREFS = 'orbit_mock_preferences';
 const STORAGE_KEY_ONBOARDED = 'orbit_mock_onboarded';
 const STORAGE_KEY_NOTES = 'orbit_mock_notes';
 
-function loadStoredState() {
+export function loadStoredState() {
   let loadedTasks = null;
   let loadedSchedules = null;
   let loadedPrefs = null;
@@ -481,6 +931,30 @@ function loadStoredState() {
     if (rawTasks) loadedTasks = JSON.parse(rawTasks);
   } catch { /* ignore */ }
 
+  // Deduplicate fixed commitments in loadedTasks by canonical signature
+  if (Array.isArray(loadedTasks)) {
+    const seenFixedSignatures = new Set();
+    const cleanTasks = [];
+    for (const t of loadedTasks) {
+      if (t.is_fixed) {
+        const title = (t.title || t.name || '').trim();
+        const days = (t.days || 'Daily').trim();
+        const start = t.start_time || '';
+        const end = t.end_time || '';
+        const cBefore = Number(t.commute_before) || 0;
+        const cAfter = Number(t.commute_after) || 0;
+        const sig = `${title}|${days}|${start}|${end}|${cBefore}|${cAfter}`.toLowerCase();
+        if (!seenFixedSignatures.has(sig)) {
+          seenFixedSignatures.add(sig);
+          cleanTasks.push(t);
+        }
+      } else {
+        cleanTasks.push(t);
+      }
+    }
+    loadedTasks = cleanTasks;
+  }
+
   try {
     const rawSchedules = localStorage.getItem(STORAGE_KEY_SCHEDULES);
     if (rawSchedules) loadedSchedules = JSON.parse(rawSchedules);
@@ -491,22 +965,50 @@ function loadStoredState() {
     if (rawOnboarded !== null) loadedOnboarded = JSON.parse(rawOnboarded);
   } catch { /* ignore */ }
 
-  const fallbackSchedules = buildSeedPastDays();
-  // Ensure today and tomorrow exist in fallbackSchedules
-  const todayStr = ymd(todayDate());
-  if (!fallbackSchedules.some((s) => s.date === todayStr)) {
-    fallbackSchedules.push(buildScheduleItems(todayDate(), 1));
+  tasks = loadedTasks || JSON.parse(JSON.stringify(INITIAL_TASKS));
+  onboarded = loadedOnboarded ?? false;
+
+  let finalSchedules = loadedSchedules;
+  if (finalSchedules && Array.isArray(finalSchedules)) {
+    // Regenerate any schedules that have an outdated or missing scheduler_version
+    finalSchedules = finalSchedules.map((s) => {
+      if (s.scheduler_version !== CURRENT_SCHEDULER_VERSION) {
+        const dateObj = new Date(s.date + 'T00:00:00');
+        const fresh = buildScheduleItems(dateObj, s.version || 1);
+        fresh.is_closed = !!s.is_closed;
+        fresh.closed_at = s.closed_at || null;
+        if (Array.isArray(s.items)) {
+          const doneTitles = new Set(s.items.filter((it) => it.done).map((it) => (it.title || '').toLowerCase()));
+          fresh.items.forEach((it) => {
+            if (it.title && doneTitles.has(it.title.toLowerCase())) {
+              it.done = true;
+            }
+          });
+        }
+        return fresh;
+      }
+      return s;
+    });
   }
-  const tomStr = ymd(addDays(todayDate(), 1));
-  if (!fallbackSchedules.some((s) => s.date === tomStr)) {
-    fallbackSchedules.push(buildScheduleItems(addDays(todayDate(), 1), 1));
+
+  if (!finalSchedules) {
+    finalSchedules = buildSeedPastDays();
+    // Ensure today and tomorrow exist in fallbackSchedules
+    const todayStr = ymd(todayDate());
+    if (!finalSchedules.some((s) => s.date === todayStr)) {
+      finalSchedules.push(buildScheduleItems(todayDate(), 1));
+    }
+    const tomStr = ymd(addDays(todayDate(), 1));
+    if (!finalSchedules.some((s) => s.date === tomStr)) {
+      finalSchedules.push(buildScheduleItems(addDays(todayDate(), 1), 1));
+    }
   }
 
   return {
-    tasks: loadedTasks || JSON.parse(JSON.stringify(INITIAL_TASKS)),
-    schedules: loadedSchedules || fallbackSchedules,
+    tasks: tasks,
+    schedules: finalSchedules,
     preferences: preferences,
-    onboarded: loadedOnboarded ?? false,
+    onboarded: onboarded,
   };
 }
 
@@ -607,34 +1109,165 @@ export async function getTasks() {
   return [...tasks];
 }
 
+function invalidateUnclosedSchedules() {
+  schedules = schedules.filter((s) => s.is_closed);
+}
+
 export async function createTask(data) {
   await delay();
+  let semPref = data.semantic_preferences;
+  if ((!semPref || semPref.isEmpty) && data.natural_language_note) {
+    const parsed = parseTaskSemantics(data.natural_language_note, data);
+    semPref = parsed.isEmpty ? null : parsed;
+  }
+
+  let tier = data.tier;
+  if (!tier) {
+    if (data.priority !== undefined) {
+      const p = Number(data.priority);
+      tier = p >= 4 ? 'have_to' : p === 3 ? 'need_to' : 'like_to';
+    } else if (semPref && semPref.tier) {
+      tier = semPref.tier;
+    } else {
+      tier = 'have_to';
+    }
+  }
+
+  const duration = Number(data.estimated_duration || data.duration || (semPref && semPref.estimated_duration) || 60);
+
+  // Determine explicit frequency & task_type (RULE 1: One-time unless explicitly recurring)
+  let freq = data.frequency || (semPref && semPref.frequency) || 'One-time';
+  const hasDeadline = Boolean(data.deadline);
+  const freqLower = (freq || '').toLowerCase().trim();
+  const isExplicitRecurring =
+    freqLower === 'daily' ||
+    freqLower === 'every day' ||
+    freqLower === 'everyday' ||
+    freqLower === 'weekdays' ||
+    freqLower === 'weekends' ||
+    freqLower === 'weekly' ||
+    freqLower === '2x a week' ||
+    freqLower === '2-3x a week' ||
+    freqLower === '3-4x a week' ||
+    freqLower === 'regularly' ||
+    freqLower === 'recurring';
+
+  let taskType = data.task_type;
+  if (!taskType) {
+    if (hasDeadline && !isExplicitRecurring) {
+      taskType = 'deadline';
+    } else if (isExplicitRecurring) {
+      taskType = 'growth';
+    } else {
+      taskType = 'deadline';
+    }
+  }
+
+  if (!isExplicitRecurring) {
+    freq = 'One-time';
+  }
+
   const task = {
-    id: uid(),
-    title: data.title || 'Untitled',
+    id: data.id || uid(),
+    title: (data.title || data.name || 'Untitled').trim(),
     category: data.category || 'academic',
-    task_type: data.task_type || 'deadline',
-    tier: data.tier || (data.is_fixed ? 'have_to' : data.category === 'hobby' ? 'like_to' : 'need_to'),
+    task_type: taskType,
+    tier,
+    priority: Number(data.priority) || (tier === 'have_to' ? 5 : tier === 'need_to' ? 3 : 1),
+    estimated_duration: duration,
+    duration,
+    frequency: freq,
+    days: data.days || data.day || null,
     deadline: data.deadline || null,
-    estimated_duration: data.estimated_duration || 60,
-    priority: data.priority || 3,
-    status: 'pending',
-    is_fixed: data.is_fixed || false,
+    status: data.status || 'pending',
+    done: !!data.done,
+    is_fixed: !!data.is_fixed,
+    natural_language_note: data.natural_language_note ? data.natural_language_note.trim() : null,
+    semantic_preferences: semPref || null,
   };
   tasks.push(task);
+  invalidateUnclosedSchedules();
   persistState();
   return task;
+}
+
+export async function updateTask(taskId, updates) {
+  await delay();
+  const idx = tasks.findIndex((t) => t.id === taskId || String(t.id) === String(taskId));
+  if (idx >= 0) {
+    const existing = tasks[idx];
+    const duration = updates.estimated_duration !== undefined
+      ? Number(updates.estimated_duration)
+      : updates.duration !== undefined
+      ? Number(updates.duration)
+      : existing.estimated_duration || existing.duration;
+
+    const tier = updates.tier || (updates.priority ? (updates.priority >= 4 ? 'have_to' : updates.priority === 3 ? 'need_to' : 'like_to') : existing.tier);
+
+    let semPref;
+    if (updates.semantic_preferences !== undefined) {
+      semPref = updates.semantic_preferences;
+    } else if (updates.natural_language_note !== undefined) {
+      const parsed = parseTaskSemantics(updates.natural_language_note, { ...existing, ...updates });
+      semPref = parsed.isEmpty ? null : parsed;
+    } else {
+      semPref = existing.semantic_preferences;
+    }
+
+    tasks[idx] = {
+      ...existing,
+      ...updates,
+      title: updates.title !== undefined ? updates.title.trim() : existing.title,
+      estimated_duration: duration,
+      duration: duration,
+      tier: tier,
+      natural_language_note: updates.natural_language_note !== undefined ? (updates.natural_language_note ? updates.natural_language_note.trim() : null) : existing.natural_language_note,
+      semantic_preferences: semPref || null,
+    };
+    invalidateUnclosedSchedules();
+    persistState();
+    return tasks[idx];
+  }
+  return null;
+}
+
+export async function deleteTask(taskId) {
+  await delay();
+  const idx = tasks.findIndex((t) => t.id === taskId || String(t.id) === String(taskId));
+  if (idx >= 0) {
+    tasks.splice(idx, 1);
+    invalidateUnclosedSchedules();
+    persistState();
+    return { success: true };
+  }
+  return { success: false };
 }
 
 export async function getSchedule(date) {
   await delay();
   const dateStr = typeof date === 'string' ? date : ymd(date);
   let found = schedules.find((s) => s.date === dateStr);
-  if (!found) {
+  if (!found || found.scheduler_version !== CURRENT_SCHEDULER_VERSION) {
     const targetDate = new Date(dateStr + 'T00:00:00');
-    found = buildScheduleItems(targetDate, 1);
-    schedules.push(found);
+    const fresh = buildScheduleItems(targetDate, found ? (found.version || 1) : 1);
+    if (found) {
+      fresh.is_closed = !!found.is_closed;
+      fresh.closed_at = found.closed_at || null;
+      if (Array.isArray(found.items)) {
+        const doneTitles = new Set(found.items.filter((it) => it.done).map((it) => (it.title || '').toLowerCase()));
+        fresh.items.forEach((it) => {
+          if (it.title && doneTitles.has(it.title.toLowerCase())) {
+            it.done = true;
+          }
+        });
+      }
+      const idx = schedules.findIndex((s) => s.date === dateStr);
+      schedules[idx] = fresh;
+    } else {
+      schedules.push(fresh);
+    }
     persistState();
+    found = fresh;
   }
   return found;
 }
@@ -788,6 +1421,15 @@ export async function closeDay(dateStr) {
   const startDate = addDays(closedDateObj, 1);
 
   for (const item of untickedItems) {
+    const matchingTask = tasks.find((t) => t.id === item.task_id || (t.title && t.title.toLowerCase() === (item.title || '').toLowerCase()));
+    const meta = matchingTask ? inferTaskMeta(matchingTask) : null;
+    const isRecurring = meta ? !meta.isOneTime : false;
+
+    if (isRecurring) {
+      // Recurring tasks/habits recur on their own scheduled days — do not create duplicate carried-forward copy
+      continue;
+    }
+
     const itemDuration = calcMins(item.start_time, item.end_time) || 60;
     const moveCount = (item.move_count || 0) + 1;
     item.move_count = moveCount;
@@ -1616,6 +2258,167 @@ export async function saveOnboarding(answers) {
     ...answers,
   };
   onboarded = true;
+
+  // Synchronize tasks collection with onboarding items
+  const syncedTasks = [];
+  const seenFixedSignatures = new Set();
+  const seenTaskTitles = new Set();
+
+  // 1. Fixed commitments
+  const fixedList = Array.isArray(answers.fixed_commitments) ? answers.fixed_commitments : [];
+  fixedList.forEach((c) => {
+    const title = (c.name || c.title || 'Fixed Commitment').trim();
+    const days = (c.days || 'Daily').trim();
+    const startTime = c.start_time || '09:00';
+    const endTime = c.end_time || '10:00';
+    const commuteBefore = Number(c.commute_before) || 0;
+    const commuteAfter = Number(c.commute_after) || 0;
+    const sig = `${title}|${days}|${startTime}|${endTime}|${commuteBefore}|${commuteAfter}`.toLowerCase();
+
+    if (title && !seenFixedSignatures.has(sig)) {
+      seenFixedSignatures.add(sig);
+      const dur = calcMins(
+        `2026-01-01T${startTime}:00`,
+        `2026-01-01T${endTime}:00`
+      ) || 60;
+      syncedTasks.push({
+        id: c.id || uid(),
+        title: title,
+        category: 'academic',
+        task_type: 'fixed',
+        tier: 'have_to',
+        priority: 5,
+        estimated_duration: dur,
+        duration: dur,
+        days: days,
+        deadline: startTime ? `2026-01-01T${startTime}:00` : null,
+        is_fixed: true,
+        done: false,
+        status: 'pending',
+        commute_before: commuteBefore,
+        commute_after: commuteAfter,
+        start_time: startTime,
+        end_time: endTime,
+      });
+    }
+  });
+
+  // 2. Need To items
+  const needList = Array.isArray(answers.need_to_items) ? answers.need_to_items : [];
+  needList.forEach((it) => {
+    const title = (it.name || it.title || 'Need To Item').trim();
+    if (title && !seenTaskTitles.has(title.toLowerCase())) {
+      seenTaskTitles.add(title.toLowerCase());
+      const dur = Number(it.duration) || Number(it.estimated_minutes) || 90;
+      let semPref = it.semantic_preferences;
+      if ((!semPref || semPref.isEmpty) && it.natural_language_note) {
+        const parsed = parseTaskSemantics(it.natural_language_note, it);
+        semPref = parsed.isEmpty ? null : parsed;
+      }
+      const rawFreq = it.frequency || (semPref && semPref.frequency);
+      const isExplicitRecurring = rawFreq && rawFreq !== 'One-time';
+      const freq = isExplicitRecurring ? rawFreq : 'One-time';
+      const taskType = it.deadline ? (isExplicitRecurring ? 'growth' : 'deadline') : (isExplicitRecurring ? 'growth' : 'deadline');
+
+      syncedTasks.push({
+        id: it.id || uid(),
+        title: title,
+        category: 'academic',
+        task_type: taskType,
+        tier: 'have_to',
+        priority: 5,
+        estimated_duration: dur,
+        duration: dur,
+        frequency: freq,
+        days: it.days || null,
+        deadline: it.deadline || null,
+        is_fixed: false,
+        done: false,
+        status: 'pending',
+        natural_language_note: it.natural_language_note || null,
+        semantic_preferences: semPref || null,
+      });
+    }
+  });
+
+  // 3. Should Do items
+  const shouldList = Array.isArray(answers.should_do_items) ? answers.should_do_items : [];
+  shouldList.forEach((it) => {
+    const title = (it.name || it.title || 'Should Do Item').trim();
+    if (title && !seenTaskTitles.has(title.toLowerCase())) {
+      seenTaskTitles.add(title.toLowerCase());
+      const dur = Number(it.duration) || Number(it.estimated_minutes) || 60;
+      let semPref = it.semantic_preferences;
+      if ((!semPref || semPref.isEmpty) && it.natural_language_note) {
+        const parsed = parseTaskSemantics(it.natural_language_note, it);
+        semPref = parsed.isEmpty ? null : parsed;
+      }
+      const rawFreq = it.frequency || (semPref && semPref.frequency);
+      const isExplicitRecurring = rawFreq && rawFreq !== 'One-time';
+      const freq = isExplicitRecurring ? rawFreq : (it.deadline ? 'One-time' : 'Daily');
+      const taskType = it.deadline ? (isExplicitRecurring ? 'growth' : 'deadline') : 'growth';
+
+      syncedTasks.push({
+        id: it.id || uid(),
+        title: title,
+        category: 'academic',
+        task_type: taskType,
+        tier: 'need_to',
+        priority: 3,
+        estimated_duration: dur,
+        duration: dur,
+        frequency: freq,
+        days: it.days || null,
+        deadline: it.deadline || null,
+        is_fixed: false,
+        done: false,
+        status: 'pending',
+        natural_language_note: it.natural_language_note || null,
+        semantic_preferences: semPref || null,
+      });
+    }
+  });
+
+  // 4. Like To items
+  const likeList = Array.isArray(answers.like_to_items) ? answers.like_to_items : [];
+  likeList.forEach((it) => {
+    const title = (it.name || it.title || 'Like To Item').trim();
+    if (title && !seenTaskTitles.has(title.toLowerCase())) {
+      seenTaskTitles.add(title.toLowerCase());
+      const dur = Number(it.duration) || Number(it.estimated_minutes) || 45;
+      let semPref = it.semantic_preferences;
+      if ((!semPref || semPref.isEmpty) && it.natural_language_note) {
+        const parsed = parseTaskSemantics(it.natural_language_note, it);
+        semPref = parsed.isEmpty ? null : parsed;
+      }
+      const rawFreq = it.frequency || (semPref && semPref.frequency);
+      const isExplicitRecurring = rawFreq && rawFreq !== 'One-time';
+      const freq = isExplicitRecurring ? rawFreq : (it.deadline ? 'One-time' : 'Weekly');
+      const taskType = it.deadline ? (isExplicitRecurring ? 'growth' : 'deadline') : 'growth';
+
+      syncedTasks.push({
+        id: it.id || uid(),
+        title: title,
+        category: 'personal',
+        task_type: taskType,
+        tier: 'like_to',
+        priority: 1,
+        estimated_duration: dur,
+        duration: dur,
+        frequency: freq,
+        days: it.days || null,
+        deadline: it.deadline || null,
+        is_fixed: false,
+        done: false,
+        status: 'pending',
+        natural_language_note: it.natural_language_note || null,
+        semantic_preferences: semPref || null,
+      });
+    }
+  });
+
+  tasks = syncedTasks;
+  invalidateUnclosedSchedules();
   persistState();
   return preferences;
 }

@@ -381,6 +381,10 @@ export function Today() {
         return <span className="tag">{tier === 'like_to' ? 'Protected Hobby' : 'Focused'}</span>;
       case 'break':
         return <span className="tag tag-sage">Recovery</span>;
+      case 'open':
+        return <span className="tag tag-sage">Open Block</span>;
+      case 'routine':
+        return <span className="tag tag-sage">Nourishment</span>;
       case 'decompression':
         return <span className="tag">Skippable</span>;
       default:
@@ -398,6 +402,10 @@ export function Today() {
         return <CheckSquare size={14} className="timeline-kind-icon" strokeWidth={1.5} />;
       case 'break':
         return <Coffee size={14} className="timeline-kind-icon" strokeWidth={1.5} style={{ color: 'var(--sage)' }} />;
+      case 'open':
+        return <Sparkles size={14} className="timeline-kind-icon" strokeWidth={1.5} style={{ color: 'var(--sage)' }} />;
+      case 'routine':
+        return <Coffee size={14} className="timeline-kind-icon" strokeWidth={1.5} />;
       case 'decompression':
         return <Moon size={14} className="timeline-kind-icon" strokeWidth={1.5} />;
       default:
@@ -578,6 +586,13 @@ export function Today() {
                     <div className="timeline-displacement-note">
                       <CornerDownRight size={13} strokeWidth={1.5} />
                       <span>{item.displacement_reason}</span>
+                    </div>
+                  )}
+
+                  {/* Contextual suggestion note for Open Blocks */}
+                  {item.suggestion && !isDisplaced && (
+                    <div style={{ fontSize: '11px', color: 'var(--ink-muted)', fontStyle: 'italic', marginTop: 'var(--space-1)', lineHeight: 1.4 }}>
+                      {item.suggestion}
                     </div>
                   )}
                 </div>

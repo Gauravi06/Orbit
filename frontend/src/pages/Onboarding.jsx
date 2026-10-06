@@ -1203,25 +1203,27 @@ export function Onboarding() {
 
               {/* Dynamic Narrative Review */}
               <div className="narrative-box">
-                {`Orbit learned that your active rhythm is ${profile.wake_time} → ${profile.sleep_time} with ${
-                  profile.week_structure === 'same_weekdays' ? 'consistent weekday commitments' : 'day-by-day varying commitments'
-                }. You have ${profile.fixed_commitments.length} protected anchor block${
-                  profile.fixed_commitments.length === 1 ? '' : 's'
-                }${
-                  profile.fixed_commitments.length > 0
-                    ? ` (${profile.fixed_commitments.map((c) => c.name).join(', ')})`
-                    : ''
-                }. You prefer ${profile.focus_style} focus sessions with ${
-                  profile.energy
-                } peak energy, and want Orbit to ${
-                  profile.hobby_preference === 'regular'
-                    ? 'regularly schedule room for'
-                    : 'protect space for'
-                } ${
-                  profile.like_to_items.length > 0
-                    ? profile.like_to_items.map((i) => i.name).join(', ')
-                    : 'your personal hobbies and balance'
-                }.`}
+                {(() => {
+                  const uniqueAnchors = Array.from(new Set(profile.fixed_commitments.map((c) => (c.name || c.title || '').trim()).filter(Boolean)));
+                  const focusLabel = profile.focus_style === 'depends' ? 'adaptive / flexible' : profile.focus_style || 'balanced';
+                  return `Orbit learned that your active rhythm is ${profile.wake_time} → ${profile.sleep_time} with ${
+                    profile.week_structure === 'same_weekdays' ? 'consistent weekday commitments' : 'day-by-day varying commitments'
+                  }. You have ${profile.fixed_commitments.length} protected anchor block${
+                    profile.fixed_commitments.length === 1 ? '' : 's'
+                  }${
+                    uniqueAnchors.length > 0 ? ` (${uniqueAnchors.join(', ')})` : ''
+                  }. You prefer ${focusLabel} focus sessions with ${
+                    profile.energy
+                  } peak energy, and want Orbit to ${
+                    profile.hobby_preference === 'regular'
+                      ? 'regularly schedule room for'
+                      : 'protect space for'
+                  } ${
+                    profile.like_to_items.length > 0
+                      ? profile.like_to_items.map((i) => i.name || i.title).join(', ')
+                      : 'your personal hobbies and balance'
+                  }.`;
+                })()}
               </div>
 
               {/* Structured Summary Grid */}

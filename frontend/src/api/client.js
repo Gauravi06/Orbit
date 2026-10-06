@@ -101,6 +101,24 @@ export async function createTask(taskData) {
   return data;
 }
 
+export async function updateTask(taskId, updates) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.updateTask(taskId, updates);
+  }
+  const { data } = await http.patch(`/tasks/${taskId}`, updates);
+  return data;
+}
+
+export async function deleteTask(taskId) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.deleteTask(taskId);
+  }
+  const { data } = await http.delete(`/tasks/${taskId}`);
+  return data;
+}
+
 /* ---------- Schedule ---------- */
 
 export async function getSchedule(date) {
@@ -269,3 +287,7 @@ export async function saveOnboarding(answers) {
   const { data } = await http.post('/onboarding', answers);
   return data;
 }
+
+/* ---------- Semantic NLP Parser ---------- */
+export { parseTaskSemantics, parseTaskSemanticsAsync } from './semanticParser';
+

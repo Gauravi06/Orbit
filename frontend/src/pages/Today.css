@@ -269,6 +269,20 @@
   border: 1px dashed var(--line);
 }
 
+/* Kind 6: Open Block */
+.timeline-card-open {
+  background-color: var(--surface);
+  border: 1px dashed var(--sage);
+  border-left: 3px solid var(--sage);
+}
+
+/* Kind 7: Routine / Nourishment */
+.timeline-card-routine {
+  background-color: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-muted);
+}
+
 /* Displaced Block Styling */
 .timeline-card-displaced {
   opacity: 0.85;
