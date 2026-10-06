@@ -3,6 +3,7 @@ import Shell from './components/Shell';
 import Login from './pages/Login';
 import Onboarding from './pages/Onboarding';
 import Today from './pages/Today';
+import Week from './pages/Week';
 import Changed from './pages/Changed';
 import Tasks from './pages/Tasks';
 import DesignGuide from './pages/DesignGuide';
@@ -37,6 +38,14 @@ export function App() {
           element={
             <AuthGuard>
               <Today />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/week"
+          element={
+            <AuthGuard>
+              <Week />
             </AuthGuard>
           }
         />

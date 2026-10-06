@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Lock,
@@ -11,14 +11,28 @@ import {
   Plus,
   RefreshCw,
   AlertCircle,
-  BatteryLow,
-  BatteryMedium,
-  Zap,
   Check,
   X,
   Loader2,
+  CheckCircle2,
+  HelpCircle,
+  CalendarCheck,
+  ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
-import { getSchedule, generateSchedule, sendNote, saveNote, errText } from '../api/client';
+import {
+  getSchedule,
+  generateSchedule,
+  sendNote,
+  saveNote,
+  setItemDone,
+  closeDay,
+  reopenDay,
+  checkUnclosedPastDay,
+  replanSchedule,
+  checkNoteVague,
+  errText,
+} from '../api/client';
 import './Today.css';
 
 /* Helper functions for dates & times */
@@ -52,12 +66,37 @@ export function Today() {
   const [error, setError] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => ymd(new Date()));
 
+  // Unclosed past day banner
+  const [unclosedNotice, setUnclosedNotice] = useState(null);
+
+  // "Done for the day" state & summary card
+  const [closingDay, setClosingDay] = useState(false);
+  const [closeSummary, setCloseSummary] = useState(null);
+
+  // "This works" thanks banner
+  const [worksMessage, setWorksMessage] = useState('');
+
+  // "Not quite right" modal state
+  const [offModalOpen, setOffModalOpen] = useState(false);
+  const [offReason, setOffReason] = useState('Too much on my plate');
+  const [offDetail, setOffDetail] = useState('');
+  const [offSubmitting, setOffSubmitting] = useState(false);
+  const offModalRef = useRef(null);
+
   // "Tell Orbit anything" note box state
-  const [energyRating, setEnergyRating] = useState('just_right'); // 'too_heavy' | 'just_right' | 'extra_energy'
   const [noteText, setNoteText] = useState('');
   const [noteLoading, setNoteLoading] = useState(false);
-  const [confirmCard, setConfirmCard] = useState(null); // { kind, understood, message, rawText, rating }
-  const [saveSuccessMessage, setSaveSuccessMessage] = useState('');
+  const [confirmCard, setConfirmCard] = useState(null); // { kind, understood, message, rawText }
+
+  // Clarifying modal for vague notes
+  const [vagueModalOpen, setVagueModalOpen] = useState(false);
+  const [clarifyQ1, setClarifyQ1] = useState('');
+  const [clarifyQ2, setClarifyQ2] = useState('');
+  const [pendingNoteData, setPendingNoteData] = useState(null);
+  const vagueModalRef = useRef(null);
+
+  // Re-plan result display (Here is what changed / Keep or Undo)
+  const [replanResult, setReplanResult] = useState(null);
 
   // Load schedule for selected date asynchronously
   const fetchSchedule = useCallback(async () => {
@@ -81,6 +120,14 @@ export function Today() {
       try {
         const data = await getSchedule(selectedDate);
         if (active) setSchedule(data);
+
+        // Check if yesterday was never closed
+        const unclosed = await checkUnclosedPastDay();
+        if (active && unclosed && selectedDate === ymd(new Date())) {
+          setUnclosedNotice(unclosed);
+        } else if (active) {
+          setUnclosedNotice(null);
+        }
       } catch (err) {
         if (active) setError(errText(err));
       } finally {
@@ -92,6 +139,20 @@ export function Today() {
       active = false;
     };
   }, [selectedDate]);
+
+  // Keyboard accessibility & focus traps for modals
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        if (offModalOpen) setOffModalOpen(false);
+        if (vagueModalOpen) setVagueModalOpen(false);
+      }
+    };
+    if (offModalOpen || vagueModalOpen) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [offModalOpen, vagueModalOpen]);
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -106,14 +167,89 @@ export function Today() {
     }
   };
 
-  // Note understanding submission
+  /* 1. Ticking non-fixed blocks */
+  const handleToggleDone = async (item) => {
+    if (item.is_fixed || schedule?.is_closed) return;
+    const nextDone = !item.done;
+
+    // Optimistic state update
+    setSchedule((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        items: prev.items.map((i) => (i.id === item.id ? { ...i, done: nextDone } : i)),
+      };
+    });
+
+    try {
+      await setItemDone(item.id, nextDone);
+    } catch (err) {
+      setError(errText(err));
+      await fetchSchedule();
+    }
+  };
+
+  /* 2. "Done for the day" */
+  const handleDoneForDay = async () => {
+    setClosingDay(true);
+    setError('');
+    try {
+      const res = await closeDay(selectedDate);
+      setCloseSummary(res);
+      await fetchSchedule();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setClosingDay(false);
+    }
+  };
+
+  const handleReopen = async () => {
+    setClosingDay(true);
+    try {
+      await reopenDay(selectedDate);
+      setCloseSummary(null);
+      await fetchSchedule();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setClosingDay(false);
+    }
+  };
+
+  /* 4. Feedback: "This works" */
+  const handleThisWorks = async () => {
+    setWorksMessage('Thank you. Orbit will protect this steady rhythm for you.');
+    setTimeout(() => setWorksMessage(''), 4500);
+  };
+
+  /* 4. Feedback: "Not quite right" Submit */
+  const handleOffSubmit = async (e) => {
+    e.preventDefault();
+    setOffSubmitting(true);
+    try {
+      const res = await replanSchedule({
+        reason: offReason,
+        feedbackText: offDetail,
+      });
+      setOffModalOpen(false);
+      setOffDetail('');
+      setReplanResult(res);
+      await fetchSchedule();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setOffSubmitting(false);
+    }
+  };
+
+  /* 5. "Tell Orbit anything" */
   const handleNoteSubmit = async (e) => {
     e.preventDefault();
     if (!noteText.trim()) return;
 
     setNoteLoading(true);
     setError('');
-    setSaveSuccessMessage('');
     try {
       const understoodData = await sendNote(noteText.trim());
       setConfirmCard({
@@ -121,7 +257,6 @@ export function Today() {
         understood: understoodData.understood,
         message: understoodData.message,
         rawText: noteText.trim(),
-        rating: energyRating,
       });
     } catch (err) {
       setError(errText(err));
@@ -130,20 +265,38 @@ export function Today() {
     }
   };
 
-  // Confirm Save action
   const handleConfirmSave = async () => {
     if (!confirmCard) return;
+
+    // Check if the note is vague
+    const isVague = checkNoteVague(confirmCard.rawText);
+    if (isVague) {
+      setPendingNoteData(confirmCard);
+      setVagueModalOpen(true);
+      return;
+    }
+
+    // Execute save and re-plan
+    await executeSaveAndReplan(confirmCard);
+  };
+
+  const executeSaveAndReplan = async (cardData, clarification = '') => {
     setNoteLoading(true);
     setError('');
     try {
       await saveNote({
-        text: confirmCard.rawText,
-        kind: confirmCard.kind,
-        rating: confirmCard.rating,
+        text: cardData.rawText,
+        kind: cardData.kind,
       });
-      setSaveSuccessMessage(confirmCard.message || 'Saved to your planner.');
+
+      const res = await replanSchedule({
+        feedbackText: cardData.rawText,
+        clarification,
+      });
+
       setConfirmCard(null);
       setNoteText('');
+      setReplanResult(res);
       await fetchSchedule();
     } catch (err) {
       setError(errText(err));
@@ -152,12 +305,40 @@ export function Today() {
     }
   };
 
-  // Reject / Not quite action
-  const handleCancelConfirm = () => {
-    setConfirmCard(null);
+  const handleSkipClarification = async () => {
+    if (!pendingNoteData) return;
+    setVagueModalOpen(false);
+    // User skipped clarification: save note only, do not re-plan
+    setNoteLoading(true);
+    try {
+      await saveNote({
+        text: pendingNoteData.rawText,
+        kind: pendingNoteData.kind,
+      });
+      setConfirmCard(null);
+      setNoteText('');
+      setWorksMessage('Note recorded quietly without schedule changes.');
+      setTimeout(() => setWorksMessage(''), 4000);
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setNoteLoading(false);
+      setPendingNoteData(null);
+    }
   };
 
-  // Day tabs (Today, Tomorrow, +2 days)
+  const handleSubmitClarification = async (e) => {
+    e.preventDefault();
+    if (!pendingNoteData) return;
+    setVagueModalOpen(false);
+    const combinedClarification = `${clarifyQ1} ${clarifyQ2}`.trim();
+    await executeSaveAndReplan(pendingNoteData, combinedClarification);
+    setPendingNoteData(null);
+    setClarifyQ1('');
+    setClarifyQ2('');
+  };
+
+  // Day tabs
   const dayTabs = useMemo(() => {
     const list = [];
     for (let i = 0; i < 4; i++) {
@@ -171,7 +352,6 @@ export function Today() {
     return list;
   }, []);
 
-  // Compute stats for current schedule
   const items = schedule?.items || [];
   const deepWorkMins = items
     .filter((i) => i.kind === 'deep' && i.status !== 'displaced')
@@ -181,8 +361,7 @@ export function Today() {
     .reduce((acc, i) => acc + calcMinutes(i.start_time, i.end_time), 0);
   const displacedCount = items.filter((i) => i.displacement_reason).length;
 
-  // Render Kind Icon & Tag
-  const renderKindBadge = (kind, displaced) => {
+  const renderKindBadge = (kind, displaced, tier) => {
     if (displaced) {
       return <span className="tag">Rescheduled</span>;
     }
@@ -192,7 +371,7 @@ export function Today() {
       case 'deep':
         return <span className="tag tag-accent">Deep Work</span>;
       case 'short':
-        return <span className="tag">Focused</span>;
+        return <span className="tag">{tier === 'like_to' ? 'Protected Hobby' : 'Focused'}</span>;
       case 'break':
         return <span className="tag tag-sage">Recovery</span>;
       case 'decompression':
@@ -219,8 +398,28 @@ export function Today() {
     }
   };
 
+  const isToday = selectedDate === ymd(new Date());
+
   return (
     <div className="today-page">
+      {/* Unclosed past day banner */}
+      {unclosedNotice && (
+        <div className="today-unclosed-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <CalendarCheck size={16} strokeWidth={1.5} style={{ color: 'var(--accent)' }} />
+            <span>Close out yesterday ({unclosedNotice.weekday})? Unticked work will find a fresh slot.</span>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ fontSize: 'var(--text-xs)', padding: 'var(--space-1) var(--space-3)' }}
+            onClick={() => setSelectedDate(unclosedNotice.unclosedDate)}
+          >
+            Review yesterday
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="today-header">
         <div className="today-header-left">
@@ -230,6 +429,7 @@ export function Today() {
               month: 'long',
               day: 'numeric',
             })}
+            {schedule?.is_closed && ' · CLOSED'}
           </span>
           <h1 className="today-title">Your Daily Rhythm</h1>
           <div className="today-summary">
@@ -254,7 +454,7 @@ export function Today() {
             type="button"
             className="btn btn-secondary"
             onClick={handleGenerate}
-            disabled={generating || loading}
+            disabled={generating || loading || schedule?.is_closed}
             aria-label="Recalculate day"
             title="Recalculate day"
           >
@@ -293,7 +493,6 @@ export function Today() {
           <div className="skeleton-box" style={{ height: '80px' }} />
           <div className="skeleton-box" style={{ height: '110px' }} />
           <div className="skeleton-box" style={{ height: '70px' }} />
-          <div className="skeleton-box" style={{ height: '90px' }} />
         </div>
       )}
 
@@ -326,6 +525,7 @@ export function Today() {
           {items.map((item, index) => {
             const isDisplaced = !!item.displacement_reason;
             const duration = calcMinutes(item.start_time, item.end_time);
+            const isDone = !!item.done;
 
             return (
               <div key={item.id || index} className="timeline-item">
@@ -339,18 +539,34 @@ export function Today() {
                 <div
                   className={`timeline-card timeline-card-${item.kind} ${
                     isDisplaced ? 'timeline-card-displaced' : ''
-                  }`}
+                  } ${isDone ? 'timeline-card-done' : ''}`}
                 >
                   <div className="timeline-card-header">
                     <div className="timeline-title-row">
-                      {getKindIcon(item.kind)}
-                      <h3 className="timeline-title">{item.title}</h3>
-                      {renderKindBadge(item.kind, isDisplaced)}
+                      {/* Checkbox for non-fixed blocks */}
+                      {!item.is_fixed ? (
+                        <button
+                          type="button"
+                          className={`block-checkbox ${isDone ? 'checked' : ''}`}
+                          onClick={() => handleToggleDone(item)}
+                          disabled={schedule?.is_closed}
+                          aria-label={`Mark ${item.title} as ${isDone ? 'provisional' : 'completed'}`}
+                        >
+                          {isDone && <Check size={13} strokeWidth={2} />}
+                        </button>
+                      ) : (
+                        getKindIcon(item.kind)
+                      )}
+
+                      <h3 className={`timeline-title ${isDone ? 'done-text' : ''}`}>
+                        {item.title}
+                      </h3>
+                      {renderKindBadge(item.kind, isDisplaced, item.tier)}
                     </div>
                     <span className="timeline-meta">{formatDuration(duration)}</span>
                   </div>
 
-                  {/* Calm displacement reason */}
+                  {/* Calm displacement note */}
                   {isDisplaced && (
                     <div className="timeline-displacement-note">
                       <CornerDownRight size={13} strokeWidth={1.5} />
@@ -364,39 +580,167 @@ export function Today() {
         </div>
       )}
 
+      {/* Done for the Day Action / Summary */}
+      {!loading && items.length > 0 && (
+        <div className="today-close-section">
+          {!schedule?.is_closed ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+              <div>
+                <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)' }}>
+                  Finished working for the day?
+                </span>
+                <p className="text-muted" style={{ fontSize: 'var(--text-xs)', margin: 0 }}>
+                  Ticks lock in and unticked work quietly finds a free slot over the coming days.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={handleDoneForDay}
+                disabled={closingDay}
+              >
+                {closingDay ? (
+                  <>
+                    <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                    <span>Closing day…</span>
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={15} strokeWidth={1.5} />
+                    <span>Done for the day</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
+              <div>
+                <span className="tag tag-accent">Day Closed</span>
+                <p className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: 'var(--space-1)' }}>
+                  Recorded on your weekly planner spread. Reopening is allowed until tomorrow morning.
+                </p>
+              </div>
+              {isToday && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={handleReopen}
+                  disabled={closingDay}
+                  style={{ fontSize: 'var(--text-xs)' }}
+                >
+                  <RotateCcw size={13} strokeWidth={1.5} />
+                  <span>Reopen this day</span>
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Close day summary card (Reuse Something changed UI) */}
+          {closeSummary && (
+            <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
+              <div className="changed-result-header">
+                <div>
+                  <h3 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+                    {closeSummary.summary}
+                  </h3>
+                  <span className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+                    Nothing failed · Work shifted quietly
+                  </span>
+                </div>
+              </div>
+
+              {/* What changed list */}
+              <div className="changed-list">
+                {closeSummary.what_changed.map((line, idx) => (
+                  <div key={idx} className="changed-list-item">
+                    <CheckCircle2 size={15} className="changed-list-icon" strokeWidth={1.5} />
+                    <span>{line}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Edge Cases: No slot before deadline or moved twice */}
+              {closeSummary.edgeCases?.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                  {closeSummary.edgeCases.map((ec, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        backgroundColor: 'var(--surface-2)',
+                        border: '1px solid var(--line)',
+                        padding: 'var(--space-3)',
+                        borderRadius: 'var(--radius-sm)',
+                        fontSize: 'var(--text-xs)',
+                        display: 'flex',
+                        alignItems: 'baseline',
+                        gap: 'var(--space-2)',
+                      }}
+                    >
+                      <HelpCircle size={14} strokeWidth={1.5} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+                      <div>
+                        <strong>{ec.itemTitle}</strong>: {ec.message}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="changed-actions-bar">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setCloseSummary(null)}
+                >
+                  <RotateCcw size={13} strokeWidth={1.5} />
+                  <span>Undo</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => setCloseSummary(null)}
+                >
+                  <span>Keep this plan</span>
+                  <ChevronRight size={14} strokeWidth={1.5} />
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step 4: Two buttons "This works" and "Not quite right" */}
+      <div className="today-feedback-two-buttons">
+        <span className="today-feedback-label">HOW DID TODAY'S RHYTHM FEEL?</span>
+        <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleThisWorks}
+          >
+            <Check size={14} strokeWidth={1.5} />
+            <span>This works</span>
+          </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={() => setOffModalOpen(true)}
+          >
+            <Sparkles size={14} strokeWidth={1.5} />
+            <span>Not quite right</span>
+          </button>
+        </div>
+      </div>
+
+      {worksMessage && (
+        <div className="today-note-feedback" role="status">
+          <span>{worksMessage}</span>
+        </div>
+      )}
+
       {/* "Tell Orbit anything" Note Box */}
       <div className="today-note-card">
         <h2 className="today-note-title">Tell Orbit anything</h2>
 
-        {/* 3 optional quick taps */}
-        <div className="today-quick-taps">
-          <button
-            type="button"
-            className={`today-quick-btn ${energyRating === 'too_heavy' ? 'active' : ''}`}
-            onClick={() => setEnergyRating(energyRating === 'too_heavy' ? '' : 'too_heavy')}
-          >
-            <BatteryLow size={15} strokeWidth={1.5} />
-            <span>Too heavy</span>
-          </button>
-          <button
-            type="button"
-            className={`today-quick-btn ${energyRating === 'just_right' ? 'active' : ''}`}
-            onClick={() => setEnergyRating(energyRating === 'just_right' ? '' : 'just_right')}
-          >
-            <BatteryMedium size={15} strokeWidth={1.5} />
-            <span>Just right</span>
-          </button>
-          <button
-            type="button"
-            className={`today-quick-btn ${energyRating === 'extra_energy' ? 'active' : ''}`}
-            onClick={() => setEnergyRating(energyRating === 'extra_energy' ? '' : 'extra_energy')}
-          >
-            <Zap size={15} strokeWidth={1.5} />
-            <span>Extra energy</span>
-          </button>
-        </div>
-
-        {/* Note Input Form */}
         <form onSubmit={handleNoteSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
           <textarea
             className="input today-note-textarea"
@@ -427,7 +771,7 @@ export function Today() {
           )}
         </form>
 
-        {/* Small Confirm Card: Nothing is saved until the user taps Save */}
+        {/* Confirm Card: Nothing is saved until the user taps Save */}
         {confirmCard && (
           <div className="today-confirm-card" role="region" aria-label="Confirm Note">
             <div className="today-confirm-header">
@@ -443,7 +787,7 @@ export function Today() {
               <button
                 type="button"
                 className="btn btn-ghost"
-                onClick={handleCancelConfirm}
+                onClick={() => setConfirmCard(null)}
                 disabled={noteLoading}
               >
                 <X size={14} strokeWidth={1.5} />
@@ -470,14 +814,187 @@ export function Today() {
             </div>
           </div>
         )}
-
-        {/* Success message banner after save */}
-        {saveSuccessMessage && (
-          <div className="today-note-feedback" role="status">
-            <span>{saveSuccessMessage}</span>
-          </div>
-        )}
       </div>
+
+      {/* Step 5: Re-plan Result (Here is what changed / Keep or Undo) */}
+      {replanResult && (
+        <div className="changed-result-card">
+          <div className="changed-result-header">
+            <div>
+              <span className="tag tag-accent">Adapting Tomorrow Onward</span>
+              <h3 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)', marginTop: '4px' }}>
+                Here is what changed
+              </h3>
+            </div>
+            <span className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
+              Past days & today's ticks preserved
+            </span>
+          </div>
+
+          <div className="changed-list">
+            {replanResult.what_changed.map((change, idx) => (
+              <div key={idx} className="changed-list-item">
+                <CheckCircle2 size={15} className="changed-list-icon" strokeWidth={1.5} />
+                <span>{change}</span>
+              </div>
+            ))}
+          </div>
+
+          <div className="changed-actions-bar">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setReplanResult(null)}
+            >
+              <RotateCcw size={13} strokeWidth={1.5} />
+              <span>Undo</span>
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => setReplanResult(null)}
+            >
+              <span>Keep this plan</span>
+              <ChevronRight size={14} strokeWidth={1.5} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 1: "What felt off?" (Focus trap, Esc closes, skippable) */}
+      {offModalOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="off-modal-title">
+          <div className="modal-dialog" ref={offModalRef}>
+            <div className="modal-header">
+              <h2 id="off-modal-title" className="modal-title">What felt off?</h2>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ padding: '4px' }}
+                onClick={() => setOffModalOpen(false)}
+                aria-label="Close dialog"
+              >
+                <X size={16} strokeWidth={1.5} />
+              </button>
+            </div>
+
+            <form onSubmit={handleOffSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              <div className="modal-options-list">
+                {[
+                  'Too much on my plate',
+                  'Wrong time of day',
+                  'Breaks too short',
+                  'Something else',
+                ].map((opt) => (
+                  <label key={opt} className="modal-radio-label">
+                    <input
+                      type="radio"
+                      name="off-reason"
+                      checked={offReason === opt}
+                      onChange={() => setOffReason(opt)}
+                    />
+                    <span>{opt}</span>
+                  </label>
+                ))}
+              </div>
+
+              {offReason === 'Something else' && (
+                <textarea
+                  className="input"
+                  rows={2}
+                  placeholder="Tell Orbit what wasn't working…"
+                  value={offDetail}
+                  onChange={(e) => setOffDetail(e.target.value)}
+                  autoFocus
+                />
+              )}
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setOffModalOpen(false)}
+                  disabled={offSubmitting}
+                >
+                  Skip
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={offSubmitting}
+                >
+                  {offSubmitting ? 'Adapting…' : 'Re-plan Tomorrow'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 2: Vague Note Clarification (At most 2 questions, skippable) */}
+      {vagueModalOpen && (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="vague-modal-title">
+          <div className="modal-dialog" ref={vagueModalRef}>
+            <div className="modal-header">
+              <h2 id="vague-modal-title" className="modal-title">Help Orbit understand</h2>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ padding: '4px' }}
+                onClick={handleSkipClarification}
+                aria-label="Close and save note only"
+              >
+                <X size={16} strokeWidth={1.5} />
+              </button>
+            </div>
+
+            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-muted)' }}>
+              Orbit wants to make sure upcoming plans reflect what you need:
+            </p>
+
+            <form onSubmit={handleSubmitClarification} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+              <div className="form-group">
+                <label style={{ fontSize: 'var(--text-xs)' }}>1. Should we adjust your study load or your break timing?</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. Lighten the study load, or longer pauses"
+                  value={clarifyQ1}
+                  onChange={(e) => setClarifyQ1(e.target.value)}
+                  autoFocus
+                />
+              </div>
+
+              <div className="form-group">
+                <label style={{ fontSize: 'var(--text-xs)' }}>2. Any specific time of day you'd like us to keep clear?</label>
+                <input
+                  type="text"
+                  className="input"
+                  placeholder="e.g. Keep tomorrow evening free"
+                  value={clarifyQ2}
+                  onChange={(e) => setClarifyQ2(e.target.value)}
+                />
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={handleSkipClarification}
+                >
+                  Skip & Save Note Only
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                >
+                  Re-plan with details
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

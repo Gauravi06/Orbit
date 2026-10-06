@@ -9,9 +9,9 @@
  */
 
 /* ---------- helpers ---------- */
-let _id = 100;
+let _id = 1000;
 const uid = () => ++_id;
-const delay = () => new Promise((r) => setTimeout(r, 600 + Math.random() * 300));
+const delay = (ms) => new Promise((r) => setTimeout(r, ms !== undefined ? ms : 300 + Math.random() * 200));
 
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -22,16 +22,13 @@ function todayDate() {
   return new Date();
 }
 
-function tomorrowDate() {
-  const d = new Date();
-  d.setDate(d.getDate() + 1);
-  return d;
+function addDays(d, n) {
+  const next = new Date(d);
+  next.setDate(next.getDate() + n);
+  return next;
 }
 
-/* ---------- Seed Data ---------- */
-
 const today = todayDate();
-const tomorrow = tomorrowDate();
 const friday = (() => {
   const d = new Date();
   const diff = 5 - d.getDay();
@@ -39,106 +36,172 @@ const friday = (() => {
   return d;
 })();
 
+/* ---------- Seed Tasks ---------- */
 const INITIAL_TASKS = [
   {
-    id: uid(), title: 'Classes', category: 'academic', task_type: 'fixed',
-    deadline: isoTime(today, 9), estimated_duration: 420, priority: 3,
+    id: 101, title: 'Classes', category: 'academic', task_type: 'fixed',
+    tier: 'have_to', deadline: isoTime(today, 9), estimated_duration: 420, priority: 3,
     status: 'scheduled', is_fixed: true,
   },
   {
-    id: uid(), title: 'Gym', category: 'health', task_type: 'fixed',
-    deadline: isoTime(today, 18), estimated_duration: 60, priority: 3,
+    id: 102, title: 'Gym', category: 'health', task_type: 'fixed',
+    tier: 'have_to', deadline: isoTime(today, 18), estimated_duration: 60, priority: 3,
     status: 'scheduled', is_fixed: true,
   },
   {
-    id: uid(), title: 'Classes', category: 'academic', task_type: 'fixed',
-    deadline: isoTime(tomorrow, 9), estimated_duration: 420, priority: 3,
-    status: 'scheduled', is_fixed: true,
-  },
-  {
-    id: uid(), title: 'Gym', category: 'health', task_type: 'fixed',
-    deadline: isoTime(tomorrow, 18), estimated_duration: 60, priority: 3,
-    status: 'scheduled', is_fixed: true,
-  },
-  {
-    id: uid(), title: 'DSA Practice', category: 'academic', task_type: 'growth',
-    deadline: null, estimated_duration: 120, priority: 3,
+    id: 103, title: 'DSA Practice', category: 'academic', task_type: 'growth',
+    tier: 'need_to', deadline: null, estimated_duration: 90, priority: 4,
     status: 'pending', is_fixed: false,
   },
   {
-    id: uid(), title: 'DBMS Assignment', category: 'academic', task_type: 'deadline',
-    deadline: isoTime(friday, 23, 59), estimated_duration: 180, priority: 4,
+    id: 104, title: 'DBMS Assignment', category: 'academic', task_type: 'deadline',
+    tier: 'have_to', deadline: isoTime(friday, 23, 59), estimated_duration: 120, priority: 5,
     status: 'pending', is_fixed: false,
   },
   {
-    id: uid(), title: 'Maths Revision', category: 'academic', task_type: 'growth',
-    deadline: null, estimated_duration: 90, priority: 2,
+    id: 105, title: 'Maths Revision', category: 'academic', task_type: 'growth',
+    tier: 'need_to', deadline: null, estimated_duration: 60, priority: 2,
+    status: 'pending', is_fixed: false,
+  },
+  {
+    id: 106, title: 'Guitar Practice', category: 'hobby', task_type: 'growth',
+    tier: 'like_to', deadline: null, estimated_duration: 45, priority: 2,
     status: 'pending', is_fixed: false,
   },
 ];
 
-const DSA_ID = INITIAL_TASKS[4].id;
-const DBMS_ID = INITIAL_TASKS[5].id;
-const MATHS_ID = INITIAL_TASKS[6].id;
+const DSA_ID = 103;
+const DBMS_ID = 104;
+const MATHS_ID = 105;
+const GUITAR_ID = 106;
 
 function buildScheduleItems(dateObj, version) {
   const date = ymd(dateObj);
+  const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+
   const items = [
     // Sleep (shown as context)
     {
       id: uid(), task_id: null, title: 'Sleep',
-      kind: 'fixed', start_time: isoTime(dateObj, 0), end_time: isoTime(dateObj, 7),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'fixed', tier: 'have_to',
+      start_time: isoTime(dateObj, 0), end_time: isoTime(dateObj, 7),
+      status: 'scheduled', is_fixed: true, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
-    // Morning classes
-    {
+  ];
+
+  if (!isWeekend) {
+    items.push({
       id: uid(), task_id: null, title: 'Classes',
-      kind: 'fixed', start_time: isoTime(dateObj, 9), end_time: isoTime(dateObj, 16),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
-    },
+      kind: 'fixed', tier: 'have_to',
+      start_time: isoTime(dateObj, 9), end_time: isoTime(dateObj, 16),
+      status: 'scheduled', is_fixed: true, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
+    });
+  }
+
+  items.push(
     // Deep work: DSA
     {
       id: uid(), task_id: DSA_ID, title: 'DSA Practice',
-      kind: 'deep', start_time: isoTime(dateObj, 16, 15), end_time: isoTime(dateObj, 18),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'deep', tier: 'need_to',
+      start_time: isoTime(dateObj, 16, 15), end_time: isoTime(dateObj, 17, 45),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
     // Gym
     {
       id: uid(), task_id: null, title: 'Gym',
-      kind: 'fixed', start_time: isoTime(dateObj, 18), end_time: isoTime(dateObj, 19),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'fixed', tier: 'have_to',
+      start_time: isoTime(dateObj, 18), end_time: isoTime(dateObj, 19),
+      status: 'scheduled', is_fixed: true, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
     // Break
     {
       id: uid(), task_id: null, title: 'Dinner & Rest',
-      kind: 'break', start_time: isoTime(dateObj, 19), end_time: isoTime(dateObj, 19, 45),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'break', tier: 'like_to',
+      start_time: isoTime(dateObj, 19), end_time: isoTime(dateObj, 19, 45),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
     // DBMS session
     {
       id: uid(), task_id: DBMS_ID, title: 'DBMS Assignment',
-      kind: 'deep', start_time: isoTime(dateObj, 19, 45), end_time: isoTime(dateObj, 21, 45),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'deep', tier: 'have_to',
+      start_time: isoTime(dateObj, 19, 45), end_time: isoTime(dateObj, 21, 15),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
+    },
+    // Guitar (protected hobby time)
+    {
+      id: uid(), task_id: GUITAR_ID, title: 'Guitar Practice',
+      kind: 'short', tier: 'like_to',
+      start_time: isoTime(dateObj, 21, 15), end_time: isoTime(dateObj, 22),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
     // Decompression
     {
       id: uid(), task_id: null, title: 'Wind Down',
-      kind: 'decompression', start_time: isoTime(dateObj, 21, 45), end_time: isoTime(dateObj, 22, 15),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      kind: 'decompression', tier: 'like_to',
+      start_time: isoTime(dateObj, 22), end_time: isoTime(dateObj, 22, 30),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     },
     // Maths (short session)
     {
       id: uid(), task_id: MATHS_ID, title: 'Maths Revision',
-      kind: 'short', start_time: isoTime(dateObj, 22, 15), end_time: isoTime(dateObj, 23),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
-    },
-  ];
+      kind: 'short', tier: 'need_to',
+      start_time: isoTime(dateObj, 22, 30), end_time: isoTime(dateObj, 23, 15),
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
+    }
+  );
+
   return {
     id: uid(),
     date,
     version: version || 1,
+    is_closed: false,
+    closed_at: null,
     items,
   };
+}
+
+/* ---------- Seed Past Days Data (For Week page in Demo) ---------- */
+function buildSeedPastDays() {
+  const pastList = [];
+  // Build days for the current week or preceding 3 days
+  const now = new Date();
+  const currentDayOfWeek = now.getDay(); // 0 Sun, 1 Mon ...
+  const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+  const monday = addDays(now, monDiff);
+
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(monday, i);
+    const isPast = d < new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const sched = buildScheduleItems(d, 1);
+    if (isPast) {
+      sched.is_closed = true;
+      sched.closed_at = isoTime(d, 23, 30);
+      // Mark items as done or moved for demo realism
+      sched.items.forEach((item, idx) => {
+        if (!item.is_fixed) {
+          if (idx % 4 === 0) {
+            item.done = false;
+            item.status = 'displaced';
+            item.displacement_reason = `Left from ${d.toLocaleDateString('en-US', { weekday: 'long' })}, so I put it here.`;
+          } else {
+            item.done = true;
+          }
+        }
+      });
+    }
+    pastList.push(sched);
+  }
+  return pastList;
 }
 
 /* ---------- LocalStorage Persistence ---------- */
@@ -174,9 +237,20 @@ function loadStoredState() {
     if (rawOnboarded !== null) loadedOnboarded = JSON.parse(rawOnboarded);
   } catch { /* ignore */ }
 
+  const fallbackSchedules = buildSeedPastDays();
+  // Ensure today and tomorrow exist in fallbackSchedules
+  const todayStr = ymd(todayDate());
+  if (!fallbackSchedules.some((s) => s.date === todayStr)) {
+    fallbackSchedules.push(buildScheduleItems(todayDate(), 1));
+  }
+  const tomStr = ymd(addDays(todayDate(), 1));
+  if (!fallbackSchedules.some((s) => s.date === tomStr)) {
+    fallbackSchedules.push(buildScheduleItems(addDays(todayDate(), 1), 1));
+  }
+
   return {
     tasks: loadedTasks || JSON.parse(JSON.stringify(INITIAL_TASKS)),
-    schedules: loadedSchedules || [buildScheduleItems(today, 1), buildScheduleItems(tomorrow, 1)],
+    schedules: loadedSchedules || fallbackSchedules,
     preferences: loadedPrefs || {
       wake_time: '07:00',
       sleep_time: '23:30',
@@ -184,6 +258,10 @@ function loadStoredState() {
       prefer_long_sessions: true,
       allow_splitting: true,
       juggles: ['classes', 'gym', 'assignments'],
+      daily_load_cap_mins: 360, // 6 hours
+      protected_hobby_mins_week: 120, // 2 hours
+      best_time_of_day: 'morning', // 'morning' | 'afternoon' | 'evening'
+      weekend_mode: 'light', // 'light' | 'normal' | 'off'
     },
     onboarded: loadedOnboarded ?? false,
   };
@@ -229,7 +307,11 @@ export function resetDemoState() {
   } catch { /* ignore */ }
 
   tasks = JSON.parse(JSON.stringify(INITIAL_TASKS));
-  schedules = [buildScheduleItems(todayDate(), 1), buildScheduleItems(tomorrowDate(), 1)];
+  schedules = buildSeedPastDays();
+  const todayStr = ymd(todayDate());
+  if (!schedules.some((s) => s.date === todayStr)) {
+    schedules.push(buildScheduleItems(todayDate(), 1));
+  }
   preferences = {
     wake_time: '07:00',
     sleep_time: '23:30',
@@ -237,6 +319,10 @@ export function resetDemoState() {
     prefer_long_sessions: true,
     allow_splitting: true,
     juggles: ['classes', 'gym', 'assignments'],
+    daily_load_cap_mins: 360,
+    protected_hobby_mins_week: 120,
+    best_time_of_day: 'morning',
+    weekend_mode: 'light',
   };
   onboarded = false;
   notes = [];
@@ -286,6 +372,7 @@ export async function createTask(data) {
     title: data.title || 'Untitled',
     category: data.category || 'academic',
     task_type: data.task_type || 'deadline',
+    tier: data.tier || (data.is_fixed ? 'have_to' : data.category === 'hobby' ? 'like_to' : 'need_to'),
     deadline: data.deadline || null,
     estimated_duration: data.estimated_duration || 60,
     priority: data.priority || 3,
@@ -300,10 +387,14 @@ export async function createTask(data) {
 export async function getSchedule(date) {
   await delay();
   const dateStr = typeof date === 'string' ? date : ymd(date);
-  const found = schedules.find((s) => s.date === dateStr);
-  if (found) return found;
-  // Return today's schedule by default
-  return schedules[0] || null;
+  let found = schedules.find((s) => s.date === dateStr);
+  if (!found) {
+    const targetDate = new Date(dateStr + 'T00:00:00');
+    found = buildScheduleItems(targetDate, 1);
+    schedules.push(found);
+    persistState();
+  }
+  return found;
 }
 
 export async function generateSchedule(date) {
@@ -319,6 +410,455 @@ export async function generateSchedule(date) {
   }
   persistState();
   return newSchedule;
+}
+
+/* =========================================================================
+   1. CHECKBOXES: setItemDone(id, done)
+   ========================================================================= */
+export async function setItemDone(itemId, done) {
+  await delay(100);
+  for (const s of schedules) {
+    const item = s.items.find((i) => i.id === itemId);
+    if (item && !item.is_fixed) {
+      item.done = !!done;
+      persistState();
+      return { success: true, item };
+    }
+  }
+  return { success: false };
+}
+
+/* =========================================================================
+   2. "DONE FOR THE DAY" & RESCHEDULING ENGINE
+   ========================================================================= */
+
+function calcMins(startIso, endIso) {
+  return Math.max(0, Math.round((new Date(endIso).getTime() - new Date(startIso).getTime()) / 60000));
+}
+
+function parseTimeToMins(timeStr) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+
+/**
+ * Checks if a past day was never closed.
+ * Returns the unclosed day string, e.g. "2026-10-05", or null.
+ */
+export async function checkUnclosedPastDay() {
+  await delay(50);
+  // Find yesterday's date
+  const yest = addDays(todayDate(), -1);
+  const yestStr = ymd(yest);
+
+  const found = schedules.find((s) => s.date === yestStr);
+  if (found && !found.is_closed) {
+    return { unclosedDate: yestStr, weekday: yest.toLocaleDateString('en-US', { weekday: 'long' }) };
+  }
+  return null;
+}
+
+/**
+ * Re-open a day if closed today or last evening.
+ */
+export async function reopenDay(dateStr) {
+  await delay(150);
+  const sched = schedules.find((s) => s.date === dateStr);
+  if (!sched) return { success: false };
+  sched.is_closed = false;
+  sched.closed_at = null;
+  persistState();
+  return { success: true, schedule: sched };
+}
+
+/**
+ * Close day implementation
+ */
+export async function closeDay(dateStr) {
+  await delay(400);
+  const sched = schedules.find((s) => s.date === dateStr);
+  if (!sched) throw new Error('Schedule not found for date ' + dateStr);
+
+  sched.is_closed = true;
+  sched.closed_at = new Date().toISOString();
+
+  const closedDateObj = new Date(dateStr + 'T00:00:00');
+  const weekdayName = closedDateObj.toLocaleDateString('en-US', { weekday: 'long' });
+
+  // Separate ticked from unticked non-fixed blocks
+  const doneItems = [];
+  const untickedItems = [];
+
+  sched.items.forEach((item) => {
+    if (item.is_fixed) return;
+    if (item.done) {
+      doneItems.push(item);
+    } else {
+      untickedItems.push(item);
+    }
+  });
+
+  // Sort unticked items by tier priority: Have to (highest) -> Need to -> Like to
+  const tierRank = { have_to: 1, need_to: 2, like_to: 3 };
+  untickedItems.sort((a, b) => (tierRank[a.tier] || 2) - (tierRank[b.tier] || 2));
+
+  const movedList = [];
+  const edgeCases = []; // issues where no slot fits before deadline, or moved twice
+
+  // Horizon: 7 days starting tomorrow
+  const startDate = addDays(closedDateObj, 1);
+
+  for (const item of untickedItems) {
+    const itemDuration = calcMins(item.start_time, item.end_time) || 60;
+    const moveCount = (item.move_count || 0) + 1;
+    item.move_count = moveCount;
+
+    if (moveCount >= 2) {
+      edgeCases.push({
+        type: 'moved_twice',
+        itemTitle: item.title,
+        message: `This one keeps moving. Want to shorten it, split it, or change the deadline?`,
+      });
+    }
+
+    // Search chronological days in planning horizon
+    let placed = false;
+
+    for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
+      const candidateDate = addDays(startDate, dayOffset);
+      const candidateDateStr = ymd(candidateDate);
+
+      // Check deadline
+      if (item.task_id) {
+        const taskObj = tasks.find((t) => t.id === item.task_id);
+        if (taskObj && taskObj.deadline) {
+          const dlTime = new Date(taskObj.deadline).getTime();
+          const dayStart = new Date(candidateDateStr + 'T00:00:00').getTime();
+          if (dayStart > dlTime) {
+            // Can't place past deadline
+            continue;
+          }
+        }
+      }
+
+      // Find or build candidate schedule
+      let candSched = schedules.find((s) => s.date === candidateDateStr);
+      if (!candSched) {
+        candSched = buildScheduleItems(candidateDate, 1);
+        schedules.push(candSched);
+      }
+
+      // Check daily load cap
+      const currentStudyMins = candSched.items
+        .filter((i) => !i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression')
+        .reduce((sum, i) => sum + calcMins(i.start_time, i.end_time), 0);
+
+      const cap = preferences.daily_load_cap_mins || 360;
+      if (currentStudyMins + itemDuration > cap) {
+        continue; // Exceeds cap
+      }
+
+      // Find a slot inside wake & sleep that doesn't overlap fixed commitments + 5 min buffer
+      const wakeMins = parseTimeToMins(preferences.wake_time || '07:00');
+      const sleepMins = parseTimeToMins(preferences.sleep_time || '23:30');
+
+      // Candidate start candidates (e.g., preference best_time_of_day: morning 9am, afternoon 14pm, evening 19pm)
+      let candidateStarts = [16 * 60 + 15, 19 * 60 + 45, 10 * 60, 14 * 60, 21 * 60];
+      if (preferences.best_time_of_day === 'morning') {
+        candidateStarts = [9 * 60, 10 * 60 + 30, 16 * 60 + 15, 19 * 60 + 45, 14 * 60];
+      } else if (preferences.best_time_of_day === 'evening') {
+        candidateStarts = [19 * 60, 20 * 60 + 30, 16 * 60 + 15, 10 * 60, 14 * 60];
+      }
+
+      let freeStart = null;
+      for (const slotStart of candidateStarts) {
+        const slotEnd = slotStart + itemDuration;
+        if (slotStart < wakeMins || slotEnd > sleepMins) continue;
+
+        // Check overlap with fixed commitments (+ 5 min buffer)
+        const overlaps = candSched.items.some((other) => {
+          if (!other.is_fixed) return false;
+          const otherStart = parseTimeToMins(other.start_time.split('T')[1].slice(0, 5)) - 5;
+          const otherEnd = parseTimeToMins(other.end_time.split('T')[1].slice(0, 5)) + 5;
+          return Math.max(slotStart, otherStart) < Math.min(slotEnd, otherEnd);
+        });
+
+        if (!overlaps) {
+          freeStart = slotStart;
+          break;
+        }
+      }
+
+      if (freeStart !== null) {
+        // Place in candidate schedule
+        const newStartH = Math.floor(freeStart / 60);
+        const newStartM = freeStart % 60;
+        const freeEnd = freeStart + itemDuration;
+        const newEndH = Math.floor(freeEnd / 60);
+        const newEndM = freeEnd % 60;
+
+        const displacedReason = `Left from ${weekdayName}, so I put it here.`;
+
+        candSched.items.push({
+          id: uid(),
+          task_id: item.task_id,
+          title: item.title,
+          kind: item.kind,
+          tier: item.tier,
+          start_time: isoTime(candidateDate, newStartH, newStartM),
+          end_time: isoTime(candidateDate, newEndH, newEndM),
+          status: 'displaced',
+          is_fixed: false,
+          done: false,
+          displaced_by_task_id: null,
+          displacement_reason: displacedReason,
+          move_count: moveCount,
+        });
+
+        candSched.version = (candSched.version || 1) + 1;
+
+        // Mark item in current day as moved
+        item.status = 'displaced';
+        item.displacement_reason = `Moved to ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}`;
+
+        movedList.push({
+          title: item.title,
+          targetDate: candidateDateStr,
+          targetDayName: candidateDate.toLocaleDateString('en-US', { weekday: 'long' }),
+        });
+
+        placed = true;
+        break;
+      }
+    }
+
+    if (!placed) {
+      edgeCases.push({
+        type: 'no_slot_before_deadline',
+        itemTitle: item.title,
+        message: `No free slot fits "${item.title}" before its deadline without crowding your rest. We can shorten it, split it across days, or make room by shifting a lower-priority item.`,
+      });
+    }
+  }
+
+  persistState();
+
+  const summarySentence = `${doneItems.length} done, ${movedList.length} moved`;
+  const whatChanged = movedList.map(
+    (m) => `"${m.title}" moved to ${m.targetDayName} (${m.targetDate})`
+  );
+
+  return {
+    success: true,
+    doneCount: doneItems.length,
+    movedCount: movedList.length,
+    summary: summarySentence,
+    movedList,
+    edgeCases,
+    what_changed: whatChanged,
+  };
+}
+
+/* =========================================================================
+   3. WEEK PAGE DATA: getWeekSpread(date)
+   ========================================================================= */
+export async function getWeekSpread(baseDate) {
+  await delay(250);
+  const now = baseDate ? new Date(baseDate + 'T00:00:00') : todayDate();
+  const currentDayOfWeek = now.getDay(); // 0 Sun, 1 Mon ...
+  const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+  const monday = addDays(now, monDiff);
+
+  const days = [];
+  let totalDeepMins = 0;
+  let totalRestMins = 0;
+  let totalHobbyMins = 0;
+
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(monday, i);
+    const dateStr = ymd(d);
+    const daySched = schedules.find((s) => s.date === dateStr);
+    const isClosed = daySched ? !!daySched.is_closed : false;
+
+    const dayInfo = {
+      date: dateStr,
+      weekday: d.toLocaleDateString('en-US', { weekday: 'short' }),
+      fullWeekday: d.toLocaleDateString('en-US', { weekday: 'long' }),
+      is_closed: isClosed,
+      items: daySched ? daySched.items : [],
+    };
+
+    if (isClosed && daySched) {
+      daySched.items.forEach((item) => {
+        const mins = calcMins(item.start_time, item.end_time);
+        if (item.kind === 'deep') {
+          totalDeepMins += mins;
+        } else if (item.kind === 'break' || item.kind === 'decompression') {
+          totalRestMins += mins;
+        }
+        if (item.tier === 'like_to' || (item.title && item.title.toLowerCase().includes('guitar'))) {
+          totalHobbyMins += mins;
+        }
+      });
+    }
+
+    days.push(dayInfo);
+  }
+
+  // Groups for 7-circle rows
+  const groupDefinitions = [
+    { key: 'dsa', title: 'DSA Practice', test: (i) => i.title && i.title.toLowerCase().includes('dsa') },
+    { key: 'dbms', title: 'DBMS Assignment', test: (i) => i.title && i.title.toLowerCase().includes('dbms') },
+    { key: 'maths', title: 'Maths Revision', test: (i) => i.title && i.title.toLowerCase().includes('math') },
+    { key: 'guitar', title: 'Guitar / Creative', test: (i) => i.title && (i.title.toLowerCase().includes('guitar') || i.tier === 'like_to') },
+  ];
+
+  const groups = groupDefinitions.map((g) => {
+    let completedSessions = 0;
+    const circles = days.map((day) => {
+      if (!day.is_closed) return 'unclosed'; // dotted
+      const match = day.items.find(g.test);
+      if (!match) return 'none';
+      if (match.done) {
+        completedSessions++;
+        return 'done'; // filled
+      }
+      return 'moved'; // empty-outlined
+    });
+
+    let sentence = `${g.title}: ${completedSessions} session${completedSessions !== 1 ? 's' : ''} completed on closed days.`;
+    if (g.key === 'guitar') {
+      const hobbyHours = (totalHobbyMins / 60).toFixed(1);
+      sentence = `Guitar: ${completedSessions} sessions, you kept your ${hobbyHours} protected hours.`;
+    }
+
+    return {
+      title: g.title,
+      circles,
+      sentence,
+      completedSessions,
+    };
+  });
+
+  const deepWorkHours = (totalDeepMins / 60).toFixed(1);
+  const restHours = (totalRestMins / 60).toFixed(1);
+  const hobbyHours = (totalHobbyMins / 60).toFixed(1);
+  const targetHobbyHours = ((preferences.protected_hobby_mins_week || 120) / 60).toFixed(1);
+
+  // Reflection generator
+  const noticeParagraph =
+    Number(deepWorkHours) >= 4
+      ? `Orbit noticed you preserved solid focus blocks during your afternoon classes without cutting into sleep. Your protected guitar time stayed intact even through assignment deadlines.`
+      : `Orbit noticed your rhythms leaned toward shorter, adaptive blocks this week to keep energy sustainable while commitments shifted.`;
+
+  const suggestion =
+    Number(deepWorkHours) >= 6
+      ? `Next week, consider adding an extra 15-minute decompression cushion after long labs to keep your evenings calm.`
+      : `Next week, we can protect one uninterrupted 90-minute morning window before midday lectures.`;
+
+  return {
+    days,
+    groups,
+    deepWorkHours,
+    restHours,
+    hobbyHours,
+    targetHobbyHours,
+    noticeParagraph,
+    suggestion,
+  };
+}
+
+/* =========================================================================
+   4 & 5. RE-PLANNING ENGINE (Tomorrow onward only, triggered by notes/feedback)
+   ========================================================================= */
+
+export async function replanSchedule({ reason, feedbackText, clarification }) {
+  await delay(400);
+
+  const whatChanged = [];
+
+  const textLower = `${feedbackText || ''} ${clarification || ''} ${reason || ''}`.toLowerCase();
+
+  const isTiredOrOverwhelmed =
+    textLower.includes('too much') ||
+    textLower.includes('tired') ||
+    textLower.includes('exhaust') ||
+    textLower.includes('drained') ||
+    textLower.includes('plate');
+
+  const isWrongTime =
+    textLower.includes('wrong time') ||
+    textLower.includes('time of day') ||
+    textLower.includes('prefer morning') ||
+    textLower.includes('prefer evening');
+
+  const isShortBreaks =
+    textLower.includes('breaks too short') ||
+    textLower.includes('short break') ||
+    textLower.includes('longer break') ||
+    textLower.includes('more rest');
+
+  // Loop through next 4 days (tomorrow onward)
+  for (let offset = 1; offset <= 4; offset++) {
+    const candidateDate = addDays(todayDate(), offset);
+    const dateStr = ymd(candidateDate);
+    const sched = schedules.find((s) => s.date === dateStr);
+    if (!sched || sched.is_closed) continue; // NEVER change past days or closed days
+
+    sched.version = (sched.version || 1) + 1;
+
+    if (isTiredOrOverwhelmed) {
+      preferences.daily_load_cap_mins = Math.max(180, (preferences.daily_load_cap_mins || 360) - 60);
+
+      // Lighten non-urgent items
+      const lowerItem = sched.items.find((i) => !i.is_fixed && i.tier !== 'have_to' && i.status !== 'displaced');
+      if (lowerItem) {
+        lowerItem.status = 'displaced';
+        lowerItem.displacement_reason = `Moved to your next deep-work block to prevent overload.`;
+        whatChanged.push(`Lightened ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}: shifted "${lowerItem.title}" to protect your energy.`);
+      }
+    } else if (isWrongTime) {
+      // Shift deep work toward user's best time
+      const deepItem = sched.items.find((i) => i.kind === 'deep' && !i.is_fixed);
+      if (deepItem) {
+        deepItem.start_time = isoTime(candidateDate, 10, 0);
+        deepItem.end_time = isoTime(candidateDate, 11, 30);
+        whatChanged.push(`Adjusted deep focus on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 10:00 AM based on your peak energy.`);
+      }
+    } else if (isShortBreaks) {
+      const breakItem = sched.items.find((i) => i.kind === 'break');
+      if (breakItem) {
+        breakItem.end_time = isoTime(candidateDate, 20, 15);
+        whatChanged.push(`Extended recovery break on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 45 minutes.`);
+      }
+    }
+  }
+
+  if (whatChanged.length === 0) {
+    whatChanged.push('Reviewed upcoming days from tomorrow onward. Your schedule is well balanced with no immediate shifts required.');
+  }
+
+  persistState();
+
+  return {
+    success: true,
+    what_changed: whatChanged,
+  };
+}
+
+/**
+ * Checks if note is vague (needs clarifying modal before re-planning)
+ */
+export function checkNoteVague(text) {
+  const lower = (text || '').toLowerCase();
+  const knownKeywords = [
+    'too much', 'plate', 'tired', 'exhaust', 'wrong time', 'morning', 'evening',
+    'break', 'rest', 'sick', 'heavy', 'light', 'guitar', 'gym', 'os practical',
+    'prefer', 'deadline', 'assignment', 'homework', 'drained'
+  ];
+  const hasKeyword = knownKeywords.some((k) => lower.includes(k));
+  return !hasKeyword;
 }
 
 export async function disrupt(text, date) {
@@ -342,26 +882,20 @@ export async function disrupt(text, date) {
   const updated = JSON.parse(JSON.stringify(target));
   updated.version += 1;
 
-  // Check if this is an "OS practical" type disruption
-  const isOsPractical = text.toLowerCase().includes('os practical') ||
-                         text.toLowerCase().includes('practical');
-  const isExhausted = text.toLowerCase().includes('exhaust') ||
-                       text.toLowerCase().includes('tired') ||
-                       text.toLowerCase().includes('sick');
+  const isOsPractical = text.toLowerCase().includes('os practical') || text.toLowerCase().includes('practical');
+  const isExhausted = text.toLowerCase().includes('exhaust') || text.toLowerCase().includes('tired') || text.toLowerCase().includes('sick');
 
   const what_changed = [];
   const at_risk = [];
 
   if (isOsPractical) {
-    // Add an OS practical task
     const osPracticalTask = {
       id: uid(), title: 'OS Practical Prep', category: 'academic',
-      task_type: 'deadline', deadline: isoTime(tomorrowDate(), 9),
+      task_type: 'deadline', tier: 'have_to', deadline: isoTime(addDays(todayDate(), 1), 9),
       estimated_duration: 120, priority: 5, status: 'pending', is_fixed: false,
     };
     tasks.push(osPracticalTask);
 
-    // Find the Maths block (lowest priority) and displace it
     const mathsIdx = updated.items.findIndex((i) => i.title === 'Maths Revision');
     if (mathsIdx >= 0) {
       updated.items[mathsIdx].displaced_by_task_id = osPracticalTask.id;
@@ -370,12 +904,13 @@ export async function disrupt(text, date) {
       updated.items[mathsIdx].status = 'displaced';
     }
 
-    // Insert OS practical in the evening slot
     updated.items.push({
       id: uid(), task_id: osPracticalTask.id, title: 'OS Practical Prep',
-      kind: 'deep', start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
+      kind: 'deep', tier: 'have_to',
+      start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
       end_time: isoTime(new Date(target.date + 'T00:00'), 23, 45),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     });
 
     what_changed.push(
@@ -390,31 +925,29 @@ export async function disrupt(text, date) {
       reason: 'Pushed to tomorrow — make sure you have a free slot then.',
     });
   } else if (isExhausted) {
-    // Lighter schedule: move Maths to tomorrow
     const mathsIdx = updated.items.findIndex((i) => i.title === 'Maths Revision');
     if (mathsIdx >= 0) {
-      updated.items[mathsIdx].displaced_by_task_id = null;
       updated.items[mathsIdx].displacement_reason =
         'Moved to tomorrow because you need recovery time tonight.';
       updated.items[mathsIdx].status = 'displaced';
     }
 
-    // Add extra decompression
     updated.items.push({
       id: uid(), task_id: null, title: 'Extra Rest',
-      kind: 'decompression', start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
+      kind: 'decompression', tier: 'like_to',
+      start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
       end_time: isoTime(new Date(target.date + 'T00:00'), 23),
-      status: 'scheduled', displaced_by_task_id: null, displacement_reason: null,
+      status: 'scheduled', is_fixed: false, done: false,
+      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
     });
 
     what_changed.push(
       'Removed "Maths Revision" from tonight and moved it to tomorrow.',
       'Added extra rest time in the evening to help you recover.',
-      'Your DBMS session stays — it\'s closer to the deadline. But take it easy.'
+      "Your DBMS session stays — it's closer to the deadline. But take it easy."
     );
   } else {
-    // Generic disruption: move one block, add a buffer
-    const deepBlocks = updated.items.filter((i) => i.kind === 'deep' || i.kind === 'short');
+    const deepBlocks = updated.items.filter((i) => (i.kind === 'deep' || i.kind === 'short') && !i.is_fixed);
     if (deepBlocks.length > 0) {
       const lowest = deepBlocks.reduce((a, b) => {
         const aTask = tasks.find((t) => t.id === a.task_id);
@@ -439,7 +972,6 @@ export async function disrupt(text, date) {
     }
   }
 
-  // Update the schedule in our store
   if (targetIdx >= 0) {
     schedules[targetIdx] = updated;
   }
@@ -461,7 +993,6 @@ export async function sendFeedback(text) {
                        text.toLowerCase().includes('rough');
 
   if (isExhausted) {
-    // Lighten tonight's load
     const todaySchedule = schedules.find((s) => s.date === ymd(todayDate()));
     if (todaySchedule) {
       const mathsIdx = todaySchedule.items.findIndex((i) => i.title === 'Maths Revision' && i.status !== 'displaced');
@@ -481,6 +1012,7 @@ export async function sendFeedback(text) {
 
   const isGood = text.toLowerCase().includes('good') ||
                   text.toLowerCase().includes('great') ||
+                  text.toLowerCase().includes('works') ||
                   text.toLowerCase().includes('productive');
 
   if (isGood) {
@@ -496,11 +1028,6 @@ export async function sendFeedback(text) {
   };
 }
 
-/**
- * Parses user input in "Tell Orbit anything" and classifies the note.
- * Returns { kind, understood, message }.
- * Does NOT apply changes or persist until saveNote() is called.
- */
 export async function sendNote(text) {
   await delay();
   const lower = (text || '').toLowerCase();
@@ -519,7 +1046,6 @@ export async function sendNote(text) {
     };
   }
 
-  // Preference pattern (morning/evening, long/short blocks, quiet, sleep)
   const isPref = lower.includes('prefer') ||
                  lower.includes('like to study') ||
                  lower.includes('morning') ||
@@ -535,7 +1061,6 @@ export async function sendNote(text) {
     };
   }
 
-  // Task pattern (need to, have to, finish, assignment, homework, submit)
   const isTask = lower.includes('need to') ||
                  lower.includes('have to') ||
                  lower.includes('finish') ||
@@ -552,7 +1077,6 @@ export async function sendNote(text) {
     };
   }
 
-  // General feedback / reflection
   const isFeedback = lower.includes('felt') ||
                      lower.includes('today') ||
                      lower.includes('paced') ||
@@ -569,7 +1093,6 @@ export async function sendNote(text) {
     };
   }
 
-  // Default general note
   return {
     kind: 'note',
     understood: `You shared a note: "${text.trim()}".`,
@@ -577,9 +1100,6 @@ export async function sendNote(text) {
   };
 }
 
-/**
- * Persists the confirmed note and triggers schedule updates if exhausted/tired.
- */
 export async function saveNote({ text, kind, rating }) {
   await delay();
   const entry = {
@@ -632,6 +1152,9 @@ export async function saveOnboarding(answers) {
   if (answers.allow_splitting !== undefined) preferences.allow_splitting = answers.allow_splitting;
   if (answers.juggles) preferences.juggles = answers.juggles;
   if (answers.anything_else) preferences.anything_else = answers.anything_else;
+  if (answers.daily_load_cap_mins) preferences.daily_load_cap_mins = answers.daily_load_cap_mins;
+  if (answers.protected_hobby_mins_week) preferences.protected_hobby_mins_week = answers.protected_hobby_mins_week;
+  if (answers.best_time_of_day) preferences.best_time_of_day = answers.best_time_of_day;
   onboarded = true;
   persistState();
   return preferences;

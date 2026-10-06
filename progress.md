@@ -105,3 +105,8 @@ Backend integration for schedule rule engine and live FastAPI endpoints to repla
 ## 2026-10-06 — Multi-Palette System (Phase 2)
 - Implemented dual attributes data-mode (light/dark) and data-palette (terracotta/sage/dusk/plum) with WCAG AA >= 4.5:1 across all 8 combinations.
 - Added onboarding "Pick your look" step, shell dropdown palette picker, no-flash html script migration, and dev-only /design showcase.
+
+## 2026-10-06 — Daily Checkboxes, Day Closing, Week Page & Adaptive Re-planning
+- Added provisional checkboxes on Today page with closeDay() horizon re-placement across wake/bed, tier priority, and load caps.
+- Built /week paper spread with 7-circle status rows, deep work/rest hours, protected hobby time, and What Orbit Noticed reflection.
+- Integrated "This works" / "Not quite right" feedback with clarifying modals and re-planning targeting tomorrow onward.

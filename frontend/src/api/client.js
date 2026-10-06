@@ -122,6 +122,74 @@ export async function generateSchedule(date) {
   return data;
 }
 
+/* ---------- Checkboxes & Day Closing ---------- */
+
+export async function setItemDone(itemId, done) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.setItemDone(itemId, done);
+  }
+  const { data } = await http.patch(`/schedules/items/${itemId}/done`, { done });
+  return data;
+}
+
+export async function closeDay(date) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.closeDay(date);
+  }
+  const { data } = await http.post('/schedules/close-day', { date });
+  return data;
+}
+
+export async function reopenDay(date) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.reopenDay(date);
+  }
+  const { data } = await http.post('/schedules/reopen-day', { date });
+  return data;
+}
+
+export async function checkUnclosedPastDay() {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.checkUnclosedPastDay();
+  }
+  const { data } = await http.get('/schedules/unclosed-check');
+  return data;
+}
+
+/* ---------- Week Spread ---------- */
+
+export async function getWeekSpread(date) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.getWeekSpread(date);
+  }
+  const { data } = await http.get('/schedules/week', { params: { date } });
+  return data;
+}
+
+/* ---------- Re-planning ---------- */
+
+export async function replanSchedule(payload) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.replanSchedule(payload);
+  }
+  const { data } = await http.post('/schedules/replan', payload);
+  return data;
+}
+
+export async function checkNoteVague(text) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.checkNoteVague(text);
+  }
+  return false;
+}
+
 /* ---------- Disruption ---------- */
 
 export async function disrupt(text, date) {

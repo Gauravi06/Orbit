@@ -10,6 +10,7 @@ import {
   ChevronDown,
   RotateCcw,
   Check,
+  Columns,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import { useTheme, PALETTES } from '../theme/useTheme';
@@ -72,6 +73,15 @@ export function Shell({ children }) {
               <span>Today</span>
             </NavLink>
             <NavLink
+              to="/week"
+              className={({ isActive }) =>
+                `shell-nav-link ${isActive ? 'active' : ''}`
+              }
+            >
+              <Columns size={15} strokeWidth={1.5} />
+              <span>Week</span>
+            </NavLink>
+            <NavLink
               to="/changed"
               className={({ isActive }) =>
                 `shell-nav-link ${isActive ? 'active' : ''}`
@@ -120,6 +130,14 @@ export function Shell({ children }) {
 
               {menuOpen && (
                 <div className="shell-dropdown">
+                  <Link
+                    to="/week"
+                    className="shell-dropdown-item"
+                    onClick={() => setMenuOpen(false)}
+                  >
+                    <Columns size={13} strokeWidth={1.5} />
+                    <span>Your Week</span>
+                  </Link>
                   <Link
                     to="/onboarding"
                     className="shell-dropdown-item"
@@ -221,6 +239,15 @@ export function Shell({ children }) {
         >
           <Calendar size={18} strokeWidth={1.5} />
           <span>Today</span>
+        </NavLink>
+        <NavLink
+          to="/week"
+          className={({ isActive }) =>
+            `shell-mobile-link ${isActive ? 'active' : ''}`
+          }
+        >
+          <Columns size={18} strokeWidth={1.5} />
+          <span>Week</span>
         </NavLink>
         <NavLink
           to="/changed"
