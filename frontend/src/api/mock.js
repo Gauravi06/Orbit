@@ -58,6 +58,63 @@ let schedules = [];
 let onboarded = false;
 let notes = [];
 
+function isTaskApplicableToDate(task, dateObj) {
+  const dateStr = ymd(dateObj);
+  const dayOfWeek = dateObj.getDay(); // 0 Sun, 1 Mon, 2 Tue, 3 Wed, 4 Thu, 5 Fri, 6 Sat
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dayOfWeek];
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  // 1. Check explicit days array or string
+  const rawDays = task.days || task.day || task.weekday;
+  if (rawDays) {
+    if (Array.isArray(rawDays) && rawDays.length > 0) {
+      return rawDays.some((d) => typeof d === 'string' && d.toLowerCase().trim() === dayName.toLowerCase());
+    }
+    if (typeof rawDays === 'string' && rawDays.trim()) {
+      const dLower = rawDays.toLowerCase().trim();
+      if (dLower === 'daily' || dLower === 'every day') return true;
+      if (dLower === 'weekdays' || dLower === 'monday–friday' || dLower === 'monday-friday' || dLower === 'weekdays only') return !isWeekend;
+      if (dLower === 'weekends' || dLower === 'weekends only') return isWeekend;
+      if (dLower === dayName.toLowerCase() || dLower.includes(dayName.toLowerCase())) return true;
+      return false;
+    }
+  }
+
+  // 2. Check frequency
+  const freq = (task.frequency || '').toLowerCase().trim();
+  if (freq) {
+    if (freq === 'daily' || freq === 'every day') return true;
+    if (freq === 'weekdays' || freq === 'monday–friday' || freq === 'monday-friday' || freq === 'weekdays only') return !isWeekend;
+    if (freq === 'weekends' || freq === 'weekends only') return isWeekend;
+    if (freq === 'weekly' || freq === '1x a week' || freq === 'once a week') {
+      // If a specific day was not provided, schedule on Monday for consistency
+      return dayOfWeek === 1;
+    }
+    if (freq === '2x a week' || freq === 'twice a week') {
+      // Tuesday and Thursday
+      return dayOfWeek === 2 || dayOfWeek === 4;
+    }
+    if (freq === '2-3x a week' || freq === '3-4x a week' || freq === '3x a week') {
+      // Monday, Wednesday, Friday
+      return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5;
+    }
+    if (freq === 'regularly') {
+      return !isWeekend;
+    }
+    if (freq === dayName.toLowerCase()) return true;
+  }
+
+  // 3. Check deadline (one-off tasks)
+  if (task.deadline) {
+    const deadlineDateStr = task.deadline.split('T')[0];
+    return deadlineDateStr === dateStr;
+  }
+
+  // 4. Default: If no frequency or deadline is set, return true
+  return true;
+}
+
 function buildScheduleItems(dateObj, version, overridePrefs) {
   const date = ymd(dateObj);
   const prefs = overridePrefs || preferences || DEFAULT_PREFERENCES;
@@ -200,18 +257,18 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
     if (b.start > currentPointer) {
       const freeStart = currentPointer;
       const freeEnd = Math.min(latestWorkTime, b.start);
-      if (freeEnd - freeStart >= 20) {
+      if (freeEnd - freeStart >= 10) {
         availableSlots.push({ start: freeStart, end: freeEnd, duration: freeEnd - freeStart });
       }
     }
     currentPointer = Math.max(currentPointer, b.end);
   }
 
-  if (currentPointer < latestWorkTime && latestWorkTime - currentPointer >= 20) {
+  if (currentPointer < latestWorkTime && latestWorkTime - currentPointer >= 10) {
     availableSlots.push({ start: currentPointer, end: latestWorkTime, duration: latestWorkTime - currentPointer });
   }
 
-  // 2. Queue actual user-defined tasks
+  // 2. Queue actual user-defined tasks respecting generic recurrence
   const needToList = Array.isArray(prefs.need_to_items) ? prefs.need_to_items : [];
   const shouldDoList = Array.isArray(prefs.should_do_items) ? prefs.should_do_items : [];
   const likeToList = Array.isArray(prefs.like_to_items) ? prefs.like_to_items : [];
@@ -219,30 +276,39 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
   const taskQueue = [];
 
   needToList.forEach((item) => {
-    taskQueue.push({
-      title: item.name,
-      tier: 'have_to',
-      kind: 'deep',
-      duration: Number(item.duration) || (isShortFocus ? 45 : isLongFocus ? 105 : 90),
-    });
+    if (isTaskApplicableToDate(item, dateObj)) {
+      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 45 : isLongFocus ? 105 : 90);
+      taskQueue.push({
+        title: item.name,
+        tier: 'have_to',
+        kind: 'deep',
+        duration: dur,
+      });
+    }
   });
 
   shouldDoList.forEach((item) => {
-    taskQueue.push({
-      title: item.name,
-      tier: 'need_to',
-      kind: 'deep',
-      duration: Number(item.duration) || (isShortFocus ? 35 : isLongFocus ? 90 : 60),
-    });
+    if (isTaskApplicableToDate(item, dateObj)) {
+      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 35 : isLongFocus ? 90 : 60);
+      taskQueue.push({
+        title: item.name,
+        tier: 'need_to',
+        kind: 'deep',
+        duration: dur,
+      });
+    }
   });
 
   likeToList.forEach((item) => {
-    taskQueue.push({
-      title: item.name,
-      tier: 'like_to',
-      kind: 'short',
-      duration: Number(item.duration) || (isShortFocus ? 30 : 45),
-    });
+    if (isTaskApplicableToDate(item, dateObj)) {
+      const dur = Number(item.duration) || Number(item.estimated_minutes) || (isShortFocus ? 30 : 45);
+      taskQueue.push({
+        title: item.name,
+        tier: 'like_to',
+        kind: 'short',
+        duration: dur,
+      });
+    }
   });
 
   // Schedule queue into open slots
@@ -250,12 +316,12 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
     let slotPtr = slot.start;
     const slotEnd = slot.end;
 
-    while (taskQueue.length > 0 && slotPtr + 20 <= slotEnd) {
+    while (taskQueue.length > 0 && slotPtr + 10 <= slotEnd) {
       const task = taskQueue.shift();
       const remainingSlot = slotEnd - slotPtr;
       const taskDur = Math.min(task.duration, remainingSlot);
 
-      if (taskDur < 20) break;
+      if (taskDur < 10) break;
 
       if (shouldSplit && taskDur >= 50 && task.tier !== 'like_to') {
         const step1Dur = Math.round(taskDur * 0.4);
@@ -591,10 +657,14 @@ export async function generateSchedule(date) {
     return newSchedule;
   }
 
-  // When called without date (e.g. from onboarding finish), generate 7-day week
-  let todaySchedule = null;
+  // When called without date (e.g. from onboarding finish), generate full Monday-Sunday week and horizon
+  const currentDayOfWeek = todayObj.getDay();
+  const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+  const monday = addDays(todayObj, monDiff);
+
+  // Generate all 7 days of the Monday-Sunday week
   for (let i = 0; i < 7; i++) {
-    const targetDate = addDays(todayObj, i);
+    const targetDate = addDays(monday, i);
     const dateStr = ymd(targetDate);
     const daySched = buildScheduleItems(targetDate, 1);
     const existing = schedules.findIndex((s) => s.date === dateStr);
@@ -603,12 +673,20 @@ export async function generateSchedule(date) {
     } else {
       schedules.push(daySched);
     }
-    if (i === 0) {
-      todaySchedule = daySched;
+  }
+
+  // Also ensure today through today + 6 are generated in schedules
+  for (let i = 0; i < 7; i++) {
+    const targetDate = addDays(todayObj, i);
+    const dateStr = ymd(targetDate);
+    if (!schedules.some((s) => s.date === dateStr)) {
+      schedules.push(buildScheduleItems(targetDate, 1));
     }
   }
 
   persistState();
+  const todayStr = ymd(todayObj);
+  const todaySchedule = schedules.find((s) => s.date === todayStr);
   return todaySchedule;
 }
 
@@ -891,15 +969,19 @@ export async function getWeekSpread(baseDate) {
   for (let i = 0; i < 7; i++) {
     const d = addDays(monday, i);
     const dateStr = ymd(d);
-    const daySched = schedules.find((s) => s.date === dateStr);
-    const isClosed = daySched ? !!daySched.is_closed : false;
+    let daySched = schedules.find((s) => s.date === dateStr);
+    if (!daySched) {
+      daySched = buildScheduleItems(d, 1);
+      schedules.push(daySched);
+    }
+    const isClosed = !!daySched.is_closed;
 
     const dayInfo = {
       date: dateStr,
       weekday: d.toLocaleDateString('en-US', { weekday: 'short' }),
       fullWeekday: d.toLocaleDateString('en-US', { weekday: 'long' }),
       is_closed: isClosed,
-      items: daySched ? daySched.items : [],
+      items: daySched.items || [],
     };
 
     if (isClosed && daySched) {

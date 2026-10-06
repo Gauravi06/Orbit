@@ -338,16 +338,23 @@ export function Today() {
     setClarifyQ2('');
   };
 
-  // Day tabs
+  // Day tabs: Complete current Monday-Sunday week (7 days)
   const dayTabs = useMemo(() => {
     const list = [];
-    for (let i = 0; i < 4; i++) {
-      const d = new Date();
-      d.setDate(d.getDate() + i);
+    const now = new Date();
+    const todayStr = ymd(now);
+    const currentDayOfWeek = now.getDay(); // 0 Sun, 1 Mon ... 6 Sat
+    const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + monDiff);
+
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + i);
       const str = ymd(d);
-      const weekday = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'short' });
+      const isCurrentDay = str === todayStr;
+      const shortWeekday = d.toLocaleDateString('en-US', { weekday: 'short' });
+      const weekday = isCurrentDay ? 'Today' : shortWeekday;
       const dateLabel = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      list.push({ dateStr: str, weekday, dateLabel });
+      list.push({ dateStr: str, weekday, dateLabel, isToday: isCurrentDay });
     }
     return list;
   }, []);
