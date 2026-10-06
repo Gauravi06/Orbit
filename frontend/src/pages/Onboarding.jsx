@@ -1,15 +1,50 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Check, Loader2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Loader2, Sun, Moon, Laptop } from 'lucide-react';
 import { saveOnboarding } from '../api/client';
+import { useTheme } from '../theme/useTheme';
 import ThemeToggle from '../components/ThemeToggle';
 import './Onboarding.css';
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
+
+const PALETTE_OPTIONS = [
+  {
+    id: 'terracotta',
+    name: 'Terracotta',
+    desc: 'Paper & warm brick focus',
+    light: { bg: '#F4EFE6', surface: '#FBF8F2', accent: '#B24322', sage: '#536D58' },
+    dark: { bg: '#14120F', surface: '#1C1915', accent: '#E0875F', sage: '#8FAE93' },
+  },
+  {
+    id: 'sage',
+    name: 'Sage',
+    desc: 'Forest moss & calm blue rest',
+    light: { bg: '#EFF3EF', surface: '#F7FAF7', accent: '#3F6B4A', sage: '#3B6079' },
+    dark: { bg: '#0F1510', surface: '#161E17', accent: '#8FBF8F', sage: '#8EB5D1' },
+  },
+  {
+    id: 'dusk',
+    name: 'Dusk',
+    desc: 'Evening indigo & quiet slate',
+    light: { bg: '#F0F1F7', surface: '#F8F8FC', accent: '#4A55A2', sage: '#46645E' },
+    dark: { bg: '#10111A', surface: '#171926', accent: '#9AA5F0', sage: '#87AEA5' },
+  },
+  {
+    id: 'plum',
+    name: 'Plum',
+    desc: 'Deep berry & eucalyptus',
+    light: { bg: '#F6F0F2', surface: '#FAF5F7', accent: '#A3365B', sage: '#466453' },
+    dark: { bg: '#170E12', surface: '#21141B', accent: '#E58AA6', sage: '#8DAF97' },
+  },
+];
 
 export function Onboarding() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const { mode, palette, setMode, setPalette } = useTheme();
+  const [modePreference, setModePreference] = useState('device'); // 'light' | 'dark' | 'device'
+
   const [answers, setAnswers] = useState({
     wake_time: '07:00',
     sleep_time: '23:30',
@@ -25,7 +60,11 @@ export function Onboarding() {
   const handleFinish = async () => {
     setLoading(true);
     try {
-      await saveOnboarding(answers);
+      await saveOnboarding({
+        ...answers,
+        palette,
+        mode,
+      });
     } catch {
       // Ignore network errors in onboarding, proceed to today
     } finally {
@@ -58,6 +97,16 @@ export function Onboarding() {
           : [...prev.juggles, key],
       };
     });
+  };
+
+  const handleModeChange = (selected) => {
+    setModePreference(selected);
+    if (selected === 'device') {
+      const isDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      setMode(isDark ? 'dark' : 'light');
+    } else {
+      setMode(selected);
+    }
   };
 
   return (
@@ -304,6 +353,138 @@ export function Onboarding() {
                   value={answers.anything_else}
                   onChange={(e) => setAnswers({ ...answers, anything_else: e.target.value })}
                 />
+              </div>
+            </>
+          )}
+
+          {/* Step 7: Pick your look (Final step) */}
+          {step === 7 && (
+            <>
+              <div>
+                <h1 className="onboarding-question-title">Pick your look</h1>
+                <p className="onboarding-question-hint">
+                  Choose a quiet palette and theme. Changes apply instantly and can be updated anytime.
+                </p>
+              </div>
+
+              {/* Mode selector: Light / Dark / Match my device */}
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', color: 'var(--ink-muted)', marginBottom: 'var(--space-2)' }}>
+                  APPEARANCE
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-2)', marginBottom: 'var(--space-5)' }}>
+                  <button
+                    type="button"
+                    className={`btn ${modePreference === 'light' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: 'var(--text-xs)', padding: 'var(--space-2) var(--space-3)' }}
+                    onClick={() => handleModeChange('light')}
+                  >
+                    <Sun size={14} strokeWidth={1.5} />
+                    <span>Light</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${modePreference === 'dark' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: 'var(--text-xs)', padding: 'var(--space-2) var(--space-3)' }}
+                    onClick={() => handleModeChange('dark')}
+                  >
+                    <Moon size={14} strokeWidth={1.5} />
+                    <span>Dark</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn ${modePreference === 'device' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: 'var(--text-xs)', padding: 'var(--space-2) var(--space-3)' }}
+                    onClick={() => handleModeChange('device')}
+                  >
+                    <Laptop size={14} strokeWidth={1.5} />
+                    <span>Match device</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Four Palette Cards with Mini Preview */}
+              <div>
+                <div style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)', color: 'var(--ink-muted)', marginBottom: 'var(--space-2)' }}>
+                  COLOR PALETTE
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+                  {PALETTE_OPTIONS.map((pal) => {
+                    const isSelected = palette === pal.id;
+                    const preview = mode === 'dark' ? pal.dark : pal.light;
+
+                    return (
+                      <button
+                        key={pal.id}
+                        type="button"
+                        onClick={() => setPalette(pal.id)}
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'stretch',
+                          padding: 'var(--space-3)',
+                          backgroundColor: 'var(--surface)',
+                          border: `2px solid ${isSelected ? 'var(--accent)' : 'var(--line)'}`,
+                          borderRadius: 'var(--radius-sm)',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          transition: 'border-color var(--transition-fast)',
+                        }}
+                      >
+                        {/* Mini preview card */}
+                        <div
+                          style={{
+                            height: '52px',
+                            borderRadius: '4px',
+                            backgroundColor: preview.bg,
+                            border: '1px solid rgba(0,0,0,0.1)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-around',
+                            padding: 'var(--space-1) var(--space-2)',
+                            marginBottom: 'var(--space-2)',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '32px',
+                              height: '24px',
+                              borderRadius: '3px',
+                              backgroundColor: preview.surface,
+                              borderLeft: `3px solid ${preview.accent}`,
+                            }}
+                          />
+                          <div
+                            style={{
+                              width: '28px',
+                              height: '14px',
+                              borderRadius: '9999px',
+                              backgroundColor: preview.accent,
+                            }}
+                          />
+                          <div
+                            style={{
+                              width: '20px',
+                              height: '14px',
+                              borderRadius: '3px',
+                              backgroundColor: preview.sage,
+                            }}
+                          />
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <span style={{ fontWeight: 'var(--font-semibold)', fontSize: 'var(--text-sm)', color: 'var(--ink)' }}>
+                            {pal.name}
+                          </span>
+                          {isSelected && <Check size={14} strokeWidth={2} style={{ color: 'var(--accent)' }} />}
+                        </div>
+                        <span style={{ fontSize: '11px', color: 'var(--ink-muted)' }}>
+                          {pal.desc}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             </>
           )}

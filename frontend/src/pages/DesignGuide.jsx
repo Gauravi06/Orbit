@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import ThemeToggle from '../components/ThemeToggle';
+import { useTheme } from '../theme/useTheme';
 
 export function DesignGuide() {
   const [inputValue, setInputValue] = useState('Organic Chemistry Assignment');
+  const { mode, palette, setPalette } = useTheme();
 
   const swatches = [
     { name: '--bg', label: 'Canvas / Page Background', token: 'var(--bg)', border: true },
@@ -11,8 +13,8 @@ export function DesignGuide() {
     { name: '--ink', label: 'Primary Text & Contrast', token: 'var(--ink)', textLight: true },
     { name: '--ink-muted', label: 'Secondary / Subtitle Text', token: 'var(--ink-muted)', textLight: true },
     { name: '--line', label: '1px Quiet Dividers', token: 'var(--line)', border: true },
-    { name: '--accent', label: 'Terracotta (Warm Focus)', token: 'var(--accent)', textLight: true },
-    { name: '--sage', label: 'Sage (Rest & Recovery)', token: 'var(--sage)', textLight: true },
+    { name: '--accent', label: 'Accent Tone (Focus / Brand)', token: 'var(--accent)', textLight: true },
+    { name: '--sage', label: 'Recovery / Rest Signal', token: 'var(--sage)', textLight: true },
     { name: '--error', label: 'Muted Brick (Validation Only)', token: 'var(--error)', textLight: true },
   ];
 
@@ -23,6 +25,53 @@ export function DesignGuide() {
     { label: 'Body Base (16px)', varName: 'var(--text-base)', family: 'var(--font-sans)', sample: 'Orbit balances your study workload calmly without overwhelming sprints or artificial urgency.' },
     { label: 'Body SM (14px)', varName: 'var(--text-sm)', family: 'var(--font-sans)', sample: 'Calculus III Problem Set 4 due tomorrow at 11:59 PM' },
     { label: 'Mono XS (12px)', varName: 'var(--text-xs)', family: 'var(--font-mono)', sample: '09:00 - 10:30 · 90 MIN STUDY BLOCK' },
+  ];
+
+  const paletteCards = [
+    {
+      id: 'terracotta',
+      name: 'Terracotta',
+      desc: 'Paper & warm brick focus. Default calm editorial tones.',
+      lightHex: '#B24322',
+      darkHex: '#E0875F',
+      bgLight: '#F4EFE6',
+      bgDark: '#14120F',
+      recoveryLight: '#536D58',
+      recoveryDark: '#8FAE93',
+    },
+    {
+      id: 'sage',
+      name: 'Sage',
+      desc: 'Quiet botanical tones with a dusty blue recovery signal to keep breaks distinct.',
+      lightHex: '#3F6B4A',
+      darkHex: '#8FBF8F',
+      bgLight: '#EFF3EF',
+      bgDark: '#0F1510',
+      recoveryLight: '#3B6079',
+      recoveryDark: '#8EB5D1',
+    },
+    {
+      id: 'dusk',
+      name: 'Dusk',
+      desc: 'Evening contemplation with twilight indigo focus and calm slate rest.',
+      lightHex: '#4A55A2',
+      darkHex: '#9AA5F0',
+      bgLight: '#F0F1F7',
+      bgDark: '#10111A',
+      recoveryLight: '#46645E',
+      recoveryDark: '#87AEA5',
+    },
+    {
+      id: 'plum',
+      name: 'Plum',
+      desc: 'Deep berry focus paired with gentle eucalyptus recovery.',
+      lightHex: '#A3365B',
+      darkHex: '#E58AA6',
+      bgLight: '#F6F0F2',
+      bgDark: '#170E12',
+      recoveryLight: '#466453',
+      recoveryDark: '#8DAF97',
+    },
   ];
 
   return (
@@ -52,12 +101,110 @@ export function DesignGuide() {
         <ThemeToggle />
       </header>
 
-      {/* 1. Color Palette Swatches */}
+      {/* 0. Palette Showcase (Requirement 11) */}
       <section style={{ marginBottom: 'var(--space-10)' }}>
         <div style={{ marginBottom: 'var(--space-4)' }}>
-          <h2>Color Tokens</h2>
+          <h2>Color Palettes</h2>
           <p className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>
-            Warm, quiet tones tested for WCAG AA contrast across all background surfaces.
+            Four calm editorial palettes. Selecting one applies it live across the entire interface.
+          </p>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 'var(--space-4)',
+          }}
+        >
+          {paletteCards.map((pal) => {
+            const isCurrent = palette === pal.id;
+            const currentAccent = mode === 'dark' ? pal.darkHex : pal.lightHex;
+            const currentBg = mode === 'dark' ? pal.bgDark : pal.bgLight;
+            const currentRecovery = mode === 'dark' ? pal.recoveryDark : pal.recoveryLight;
+
+            return (
+              <div
+                key={pal.id}
+                style={{
+                  backgroundColor: 'var(--surface)',
+                  border: `2px solid ${isCurrent ? 'var(--accent)' : 'var(--line)'}`,
+                  borderRadius: 'var(--radius-md)',
+                  padding: 'var(--space-4)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-3)',
+                }}
+              >
+                {/* Visual strip preview */}
+                <div
+                  style={{
+                    height: '56px',
+                    backgroundColor: currentBg,
+                    border: '1px solid var(--line)',
+                    borderRadius: 'var(--radius-sm)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-around',
+                    padding: 'var(--space-2)',
+                  }}
+                >
+                  <div
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: currentAccent,
+                      color: mode === 'dark' ? '#14120F' : '#FBF8F2',
+                      fontSize: '11px',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  >
+                    Accent
+                  </div>
+                  <div
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: currentRecovery,
+                      color: mode === 'dark' ? '#14120F' : '#FBF8F2',
+                      fontSize: '11px',
+                      fontFamily: 'var(--font-mono)',
+                    }}
+                  >
+                    Recovery
+                  </div>
+                </div>
+
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <h3 style={{ margin: 0, fontSize: 'var(--text-base)' }}>{pal.name}</h3>
+                    {isCurrent && <span className="tag tag-accent">Active</span>}
+                  </div>
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-muted)', marginTop: 'var(--space-1)' }}>
+                    {pal.desc}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  className={`btn ${isCurrent ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{ fontSize: 'var(--text-xs)', marginTop: 'auto' }}
+                  onClick={() => setPalette(pal.id)}
+                >
+                  {isCurrent ? 'Currently Active' : `Switch to ${pal.name}`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* 1. Color Palette Swatches (Current Active Palette) */}
+      <section style={{ marginBottom: 'var(--space-10)' }}>
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <h2>Current Palette Swatches ({palette.toUpperCase()} · {mode.toUpperCase()})</h2>
+          <p className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>
+            Warm, quiet tones tested for WCAG AA contrast (&gt;= 4.5:1) across all background surfaces.
           </p>
         </div>
 
@@ -192,7 +339,7 @@ export function DesignGuide() {
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-2)', alignItems: 'center' }}>
               <span className="tag">Academic · 3 hrs</span>
-              <span className="tag tag-accent">Terracotta Focus</span>
+              <span className="tag tag-accent">Accent Focus</span>
               <span className="tag tag-sage">Rest & Recovery</span>
             </div>
           </div>

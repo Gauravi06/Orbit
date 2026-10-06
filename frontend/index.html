@@ -14,19 +14,41 @@
       rel="stylesheet"
     />
 
-    <!-- Theme flash prevention: evaluates and applies theme before first paint -->
+    <!-- Theme flash prevention: evaluates and applies mode & palette before first paint -->
     <script>
       (function () {
         try {
+          var mode = 'light';
+          var palette = 'terracotta';
+
+          // Migrate old theme storage or read new theme storage
           var saved = localStorage.getItem('orbit_theme');
-          if (saved === 'paper' || saved === 'ink') {
-            document.documentElement.setAttribute('data-theme', saved);
+          if (saved === 'paper') {
+            mode = 'light';
+            palette = 'terracotta';
+          } else if (saved === 'ink') {
+            mode = 'dark';
+            palette = 'terracotta';
+          } else if (saved) {
+            try {
+              var parsed = JSON.parse(saved);
+              if (parsed && typeof parsed === 'object') {
+                if (parsed.mode === 'light' || parsed.mode === 'dark') mode = parsed.mode;
+                if (['terracotta', 'sage', 'dusk', 'plum'].indexOf(parsed.palette) !== -1) palette = parsed.palette;
+              }
+            } catch (e) {
+              /* ignore parse error */
+            }
           } else {
             var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-            document.documentElement.setAttribute('data-theme', prefersDark ? 'ink' : 'paper');
+            mode = prefersDark ? 'dark' : 'light';
           }
+
+          document.documentElement.setAttribute('data-mode', mode);
+          document.documentElement.setAttribute('data-palette', palette);
         } catch (e) {
-          document.documentElement.setAttribute('data-theme', 'paper');
+          document.documentElement.setAttribute('data-mode', 'light');
+          document.documentElement.setAttribute('data-palette', 'terracotta');
         }
       })();
     </script>

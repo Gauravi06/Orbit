@@ -9,8 +9,10 @@ import {
   Sliders,
   ChevronDown,
   RotateCcw,
+  Check,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
+import { useTheme, PALETTES } from '../theme/useTheme';
 import { resetDemo } from '../api/client';
 import './Shell.css';
 
@@ -21,6 +23,7 @@ export function Shell({ children }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
   const navigate = useNavigate();
+  const { palette, setPalette } = useTheme();
 
   const handleLogout = () => {
     try {
@@ -125,6 +128,50 @@ export function Shell({ children }) {
                     <Sliders size={13} strokeWidth={1.5} />
                     <span>Preferences</span>
                   </Link>
+
+                  {/* Palette Picker in User Menu */}
+                  <div style={{ padding: 'var(--space-2) var(--space-3)' }}>
+                    <div
+                      style={{
+                        fontSize: '11px',
+                        fontFamily: 'var(--font-mono)',
+                        color: 'var(--ink-muted)',
+                        marginBottom: 'var(--space-1)',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.04em',
+                      }}
+                    >
+                      Palette
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+                      {PALETTES.map((p) => {
+                        const isSelected = palette === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            type="button"
+                            onClick={() => setPalette(p.id)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '4px 8px',
+                              borderRadius: 'var(--radius-sm)',
+                              border: `1px solid ${isSelected ? 'var(--accent)' : 'var(--line)'}`,
+                              backgroundColor: isSelected ? 'var(--surface-2)' : 'transparent',
+                              color: 'var(--ink)',
+                              fontSize: '11px',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            <span>{p.name}</span>
+                            {isSelected && <Check size={11} strokeWidth={2} style={{ color: 'var(--accent)' }} />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {IS_DEV && (
                     <Link
                       to="/design"

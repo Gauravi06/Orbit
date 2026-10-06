@@ -4,6 +4,9 @@
  * Design Direction:
  * Paper planner crossed with a calm editorial magazine.
  * Warm, human, quiet. Full control via CSS variables.
+ *
+ * Mode: light | dark (set via html[data-mode])
+ * Palette: terracotta | sage | dusk | plum (set via html[data-palette])
  */
 
 :root {
@@ -52,11 +55,19 @@
   /* Transitions (150-200ms ease-out for state changes only) */
   --transition-fast: 150ms ease-out;
   --transition-base: 200ms ease-out;
+
+  /* Focus rings offset */
+  --focus-offset: 2px;
 }
 
-/* Light Theme: Paper (Default) */
+/* ==========================================================================
+   PALETTE 1: TERRACOTTA (Default - Exact Paper & Ink values)
+   ========================================================================== */
+
+/* Terracotta - Light (Paper) */
 :root,
-html[data-theme="paper"] {
+html[data-mode="light"],
+html[data-mode="light"][data-palette="terracotta"] {
   color-scheme: light;
 
   /* Surfaces & Ink */
@@ -68,25 +79,23 @@ html[data-theme="paper"] {
   --line: #DDD3C2;
 
   /* Accents & Signals */
-  --accent: #B24322; /* terracotta (adjusted for WCAG AA >= 4.5:1 across all surfaces) */
+  --accent: #B24322;
   --accent-hover: #9C371A;
   --accent-contrast: #FBF8F2;
-  --sage: #536D58;   /* rest / recovery (adjusted for WCAG AA >= 4.5:1 across all surfaces) */
+  --sage: #536D58;   /* rest / recovery */
   --sage-bg: #EAEFEA;
   --error: #A33822;  /* muted brick: form validation ONLY */
   --error-bg: #F9EBE7;
 
-  /* Floating Elevation (menus, dialogs only) */
+  /* Elevation & Focus */
   --shadow-floating: 0 12px 32px -4px rgba(31, 27, 22, 0.12),
                      0 4px 12px -2px rgba(31, 27, 22, 0.08);
-
-  /* Focus ring */
   --focus-ring: 2px solid #B24322;
-  --focus-offset: 2px;
 }
 
-/* Dark Theme: Ink (Warm dark, NOT pure black, NOT blue-grey) */
-html[data-theme="ink"] {
+/* Terracotta - Dark (Ink) */
+html[data-mode="dark"],
+html[data-mode="dark"][data-palette="terracotta"] {
   color-scheme: dark;
 
   /* Surfaces & Ink */
@@ -106,13 +115,172 @@ html[data-theme="ink"] {
   --error: #E87A6E;  /* muted brick: form validation ONLY */
   --error-bg: #2B1917;
 
-  /* Floating Elevation (menus, dialogs only) */
+  /* Elevation & Focus */
   --shadow-floating: 0 16px 36px -4px rgba(0, 0, 0, 0.55),
                      0 6px 16px -2px rgba(0, 0, 0, 0.40);
-
-  /* Focus ring */
   --focus-ring: 2px solid #E0875F;
-  --focus-offset: 2px;
+}
+
+/* ==========================================================================
+   PALETTE 2: SAGE
+   Accent: #3F6B4A (light) / #8FBF8F (dark)
+   Recovery colour: dusty blue (#3B6079 light / #8EB5D1 dark) so breaks stay distinct
+   ========================================================================== */
+
+/* Sage - Light */
+html[data-mode="light"][data-palette="sage"] {
+  color-scheme: light;
+
+  --bg: #EFF3EF;
+  --surface: #F7FAF7;
+  --surface-2: #E4ECE4;
+  --ink: #162218;
+  --ink-muted: #526655;
+  --line: #D0DDD0;
+
+  --accent: #3F6B4A;
+  --accent-hover: #32553B;
+  --accent-contrast: #F7FAF7;
+  --sage: #3B6079;   /* Dusty blue: distinct from green accent */
+  --sage-bg: #E3ECF3;
+  --error: #A33822;
+  --error-bg: #F9EBE7;
+
+  --shadow-floating: 0 12px 32px -4px rgba(22, 34, 24, 0.12),
+                     0 4px 12px -2px rgba(22, 34, 24, 0.08);
+  --focus-ring: 2px solid #3F6B4A;
+}
+
+/* Sage - Dark */
+html[data-mode="dark"][data-palette="sage"] {
+  color-scheme: dark;
+
+  --bg: #0F1510;
+  --surface: #161E17;
+  --surface-2: #1F2920;
+  --ink: #E7EFE8;
+  --ink-muted: #94A696;
+  --line: #29372B;
+
+  --accent: #8FBF8F;
+  --accent-hover: #A5CFA5;
+  --accent-contrast: #0F1510;
+  --sage: #8EB5D1;   /* Dusty blue: distinct from green accent */
+  --sage-bg: #17242E;
+  --error: #E87A6E;
+  --error-bg: #2B1917;
+
+  --shadow-floating: 0 16px 36px -4px rgba(0, 0, 0, 0.55),
+                     0 6px 16px -2px rgba(0, 0, 0, 0.40);
+  --focus-ring: 2px solid #8FBF8F;
+}
+
+/* ==========================================================================
+   PALETTE 3: DUSK
+   Accent: #4A55A2 (light) / #9AA5F0 (dark)
+   Recovery colour: calm sage (#46645E light / #87AEA5 dark)
+   ========================================================================== */
+
+/* Dusk - Light */
+html[data-mode="light"][data-palette="dusk"] {
+  color-scheme: light;
+
+  --bg: #F0F1F7;
+  --surface: #F8F8FC;
+  --surface-2: #E4E6F2;
+  --ink: #191B2D;
+  --ink-muted: #575A75;
+  --line: #D2D5E6;
+
+  --accent: #4A55A2;
+  --accent-hover: #3C4585;
+  --accent-contrast: #F8F8FC;
+  --sage: #46645E;
+  --sage-bg: #E5EEEC;
+  --error: #A33822;
+  --error-bg: #F9EBE7;
+
+  --shadow-floating: 0 12px 32px -4px rgba(25, 27, 45, 0.12),
+                     0 4px 12px -2px rgba(25, 27, 45, 0.08);
+  --focus-ring: 2px solid #4A55A2;
+}
+
+/* Dusk - Dark */
+html[data-mode="dark"][data-palette="dusk"] {
+  color-scheme: dark;
+
+  --bg: #10111A;
+  --surface: #171926;
+  --surface-2: #202235;
+  --ink: #E8E9F6;
+  --ink-muted: #9699B5;
+  --line: #2B2E47;
+
+  --accent: #9AA5F0;
+  --accent-hover: #B2BCF7;
+  --accent-contrast: #10111A;
+  --sage: #87AEA5;
+  --sage-bg: #172421;
+  --error: #E87A6E;
+  --error-bg: #2B1917;
+
+  --shadow-floating: 0 16px 36px -4px rgba(0, 0, 0, 0.55),
+                     0 6px 16px -2px rgba(0, 0, 0, 0.40);
+  --focus-ring: 2px solid #9AA5F0;
+}
+
+/* ==========================================================================
+   PALETTE 4: PLUM
+   Accent: #A3365B (light) / #E58AA6 (dark)
+   Recovery colour: calm eucalyptus (#466453 light / #8DAF97 dark)
+   ========================================================================== */
+
+/* Plum - Light */
+html[data-mode="light"][data-palette="plum"] {
+  color-scheme: light;
+
+  --bg: #F6F0F2;
+  --surface: #FAF5F7;
+  --surface-2: #EFE3E7;
+  --ink: #27161D;
+  --ink-muted: #6E4E5A;
+  --line: #DECED4;
+
+  --accent: #A3365B;
+  --accent-hover: #862B4A;
+  --accent-contrast: #FAF5F7;
+  --sage: #466453;
+  --sage-bg: #E6EFE9;
+  --error: #A33822;
+  --error-bg: #F9EBE7;
+
+  --shadow-floating: 0 12px 32px -4px rgba(39, 22, 29, 0.12),
+                     0 4px 12px -2px rgba(39, 22, 29, 0.08);
+  --focus-ring: 2px solid #A3365B;
+}
+
+/* Plum - Dark */
+html[data-mode="dark"][data-palette="plum"] {
+  color-scheme: dark;
+
+  --bg: #170E12;
+  --surface: #21141B;
+  --surface-2: #2D1B24;
+  --ink: #F5E8ED;
+  --ink-muted: #B095A0;
+  --line: #3D2632;
+
+  --accent: #E58AA6;
+  --accent-hover: #EEA6BC;
+  --accent-contrast: #170E12;
+  --sage: #8DAF97;
+  --sage-bg: #19261E;
+  --error: #E87A6E;
+  --error-bg: #2B1917;
+
+  --shadow-floating: 0 16px 36px -4px rgba(0, 0, 0, 0.55),
+                     0 6px 16px -2px rgba(0, 0, 0, 0.40);
+  --focus-ring: 2px solid #E58AA6;
 }
 
 /* Respect user's motion preferences */

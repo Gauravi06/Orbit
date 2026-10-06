@@ -101,3 +101,7 @@ Backend integration for schedule rule engine and live FastAPI endpoints to repla
 ## 2026-10-06 — Frontend Cleanup (Phase 1)
 - Cleaned /changed screen to single prompt, moved feedback to Today page under "Tell Orbit anything" with 2-step confirmation and sendNote().
 - Secured dev-only /design access, restricted Fill Demo to mock mode, and persisted mock data to localStorage with reset action.
+
+## 2026-10-06 — Multi-Palette System (Phase 2)
+- Implemented dual attributes data-mode (light/dark) and data-palette (terracotta/sage/dusk/plum) with WCAG AA >= 4.5:1 across all 8 combinations.
+- Added onboarding "Pick your look" step, shell dropdown palette picker, no-flash html script migration, and dev-only /design showcase.
