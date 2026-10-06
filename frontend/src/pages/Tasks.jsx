@@ -29,7 +29,7 @@ export function Tasks() {
   });
 
   const [fixedForm, setFixedForm] = useState({
-    title: 'Classes',
+    title: '',
     category: 'academic',
     date: new Date().toISOString().split('T')[0],
     time: '09:00',

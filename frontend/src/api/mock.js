@@ -37,127 +37,309 @@ const friday = (() => {
 })();
 
 /* ---------- Seed Tasks ---------- */
-const INITIAL_TASKS = [
-  {
-    id: 101, title: 'Classes', category: 'academic', task_type: 'fixed',
-    tier: 'have_to', deadline: isoTime(today, 9), estimated_duration: 420, priority: 3,
-    status: 'scheduled', is_fixed: true,
-  },
-  {
-    id: 102, title: 'Gym', category: 'health', task_type: 'fixed',
-    tier: 'have_to', deadline: isoTime(today, 18), estimated_duration: 60, priority: 3,
-    status: 'scheduled', is_fixed: true,
-  },
-  {
-    id: 103, title: 'DSA Practice', category: 'academic', task_type: 'growth',
-    tier: 'need_to', deadline: null, estimated_duration: 90, priority: 4,
-    status: 'pending', is_fixed: false,
-  },
-  {
-    id: 104, title: 'DBMS Assignment', category: 'academic', task_type: 'deadline',
-    tier: 'have_to', deadline: isoTime(friday, 23, 59), estimated_duration: 120, priority: 5,
-    status: 'pending', is_fixed: false,
-  },
-  {
-    id: 105, title: 'Maths Revision', category: 'academic', task_type: 'growth',
-    tier: 'need_to', deadline: null, estimated_duration: 60, priority: 2,
-    status: 'pending', is_fixed: false,
-  },
-  {
-    id: 106, title: 'Guitar Practice', category: 'hobby', task_type: 'growth',
-    tier: 'like_to', deadline: null, estimated_duration: 45, priority: 2,
-    status: 'pending', is_fixed: false,
-  },
-];
+const INITIAL_TASKS = [];
 
-const DSA_ID = 103;
-const DBMS_ID = 104;
-const MATHS_ID = 105;
-const GUITAR_ID = 106;
+const DEFAULT_PREFERENCES = {
+  wake_time: '07:00',
+  sleep_time: '23:30',
+  focus_length: 90,
+  prefer_long_sessions: true,
+  allow_splitting: true,
+  juggles: ['classes', 'gym', 'assignments'],
+  daily_load_cap_mins: 360, // 6 hours
+  protected_hobby_mins_week: 120, // 2 hours
+  best_time_of_day: 'morning', // 'morning' | 'afternoon' | 'evening'
+  weekend_mode: 'light', // 'light' | 'normal' | 'off'
+};
 
-function buildScheduleItems(dateObj, version) {
+let preferences = { ...DEFAULT_PREFERENCES };
+let tasks = [];
+let schedules = [];
+let onboarded = false;
+let notes = [];
+
+function buildScheduleItems(dateObj, version, overridePrefs) {
   const date = ymd(dateObj);
-  const isWeekend = dateObj.getDay() === 0 || dateObj.getDay() === 6;
+  const prefs = overridePrefs || preferences || DEFAULT_PREFERENCES;
 
-  const items = [
-    // Sleep (shown as context)
-    {
-      id: uid(), task_id: null, title: 'Sleep',
-      kind: 'fixed', tier: 'have_to',
-      start_time: isoTime(dateObj, 0), end_time: isoTime(dateObj, 7),
-      status: 'scheduled', is_fixed: true, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-  ];
+  const wakeStr = prefs.wake_time || '07:00';
+  const sleepStr = prefs.sleep_time || '23:30';
+  const wakeMins = parseTimeToMins(wakeStr);
+  let sleepMins = parseTimeToMins(sleepStr);
+  if (sleepMins <= wakeMins) {
+    sleepMins = 23 * 60 + 59;
+  }
 
-  if (!isWeekend) {
+  const dayOfWeek = dateObj.getDay();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dayOfWeek];
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  // Focus & behavioral preferences
+  const focusLen = Number(prefs.focus_length) || (prefs.focus_style === 'short' ? 40 : prefs.focus_style === 'long' ? 100 : 60);
+  const isShortFocus = prefs.focus_style === 'short' || focusLen <= 45;
+  const isLongFocus = prefs.focus_style === 'long' || focusLen >= 100;
+  const allowSplit = prefs.allow_splitting !== false || prefs.task_splitting === 'yes' || prefs.task_splitting === 'large';
+  const shouldSplit = allowSplit && (isShortFocus || prefs.task_initiation === 'tiny_step');
+
+  const breakMins = prefs.break_preference === 'frequent' ? 20 : prefs.break_preference === 'fewer_longer' ? 10 : 15;
+  const windDownMins = 30;
+
+  const items = [];
+
+  const addBlock = ({ taskId, title, kind, tier, startMins, endMins, isFixed = false, displacementReason = null, status = 'scheduled' }) => {
+    const safeStart = Math.max(wakeMins, Math.min(sleepMins - 10, startMins));
+    const safeEnd = Math.max(safeStart + 10, Math.min(sleepMins, endMins));
+    if (safeEnd <= safeStart) return;
+
+    const startH = Math.floor(safeStart / 60);
+    const startM = safeStart % 60;
+    const endH = Math.floor(safeEnd / 60);
+    const endM = safeEnd % 60;
+
     items.push({
-      id: uid(), task_id: null, title: 'Classes',
-      kind: 'fixed', tier: 'have_to',
-      start_time: isoTime(dateObj, 9), end_time: isoTime(dateObj, 16),
-      status: 'scheduled', is_fixed: true, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
+      id: uid(),
+      task_id: taskId || null,
+      title,
+      kind,
+      tier,
+      start_time: isoTime(dateObj, startH, startM),
+      end_time: isoTime(dateObj, endH, endM),
+      status,
+      is_fixed: isFixed,
+      done: false,
+      displaced_by_task_id: null,
+      displacement_reason: displacementReason,
+      move_count: 0,
+    });
+  };
+
+  // 1. Filter fixed commitments for this day
+  const rawCommitments = Array.isArray(prefs.fixed_commitments) ? prefs.fixed_commitments : [];
+  const dayCommitments = rawCommitments.filter((c) => {
+    if (!c.days || c.days === 'Daily') return true;
+    if (c.days === 'Monday–Friday' || c.days === 'Weekdays') return !isWeekend;
+    if (c.days === 'Weekends') return isWeekend;
+    return c.days.toLowerCase() === dayName.toLowerCase();
+  });
+
+  // Track unavailable intervals (including commute buffers)
+  const busyIntervals = [];
+
+  dayCommitments.forEach((c) => {
+    const cStart = parseTimeToMins(c.start_time);
+    const cEnd = parseTimeToMins(c.end_time);
+    const cBefore = Number(c.commute_before) || 0;
+    const cAfter = Number(c.commute_after) || 0;
+
+    // Add commute before if specified
+    if (cBefore > 0 && cStart - cBefore >= wakeMins) {
+      addBlock({
+        taskId: null,
+        title: `Travel: ${c.name}`,
+        kind: 'break',
+        tier: 'have_to',
+        startMins: cStart - cBefore,
+        endMins: cStart,
+        isFixed: true,
+      });
+    }
+
+    // Add fixed commitment block
+    addBlock({
+      taskId: null,
+      title: c.name,
+      kind: 'fixed',
+      tier: 'have_to',
+      startMins: cStart,
+      endMins: cEnd,
+      isFixed: true,
+    });
+
+    // Add commute after if specified
+    if (cAfter > 0 && cEnd + cAfter <= sleepMins) {
+      addBlock({
+        taskId: null,
+        title: `Transition: ${c.name}`,
+        kind: 'break',
+        tier: 'have_to',
+        startMins: cEnd,
+        endMins: cEnd + cAfter,
+        isFixed: true,
+      });
+    }
+
+    busyIntervals.push({
+      start: Math.max(wakeMins, cStart - cBefore),
+      end: Math.min(sleepMins, cEnd + cAfter),
+    });
+  });
+
+  // Sort & merge busy intervals
+  busyIntervals.sort((a, b) => a.start - b.start);
+  const mergedBusy = [];
+  for (const interval of busyIntervals) {
+    if (mergedBusy.length === 0) {
+      mergedBusy.push({ ...interval });
+    } else {
+      const last = mergedBusy[mergedBusy.length - 1];
+      if (interval.start <= last.end) {
+        last.end = Math.max(last.end, interval.end);
+      } else {
+        mergedBusy.push({ ...interval });
+      }
+    }
+  }
+
+  // Calculate free intervals
+  const availableSlots = [];
+  let currentPointer = wakeMins;
+  const latestWorkTime = sleepMins - windDownMins;
+
+  for (const b of mergedBusy) {
+    if (b.start > currentPointer) {
+      const freeStart = currentPointer;
+      const freeEnd = Math.min(latestWorkTime, b.start);
+      if (freeEnd - freeStart >= 20) {
+        availableSlots.push({ start: freeStart, end: freeEnd, duration: freeEnd - freeStart });
+      }
+    }
+    currentPointer = Math.max(currentPointer, b.end);
+  }
+
+  if (currentPointer < latestWorkTime && latestWorkTime - currentPointer >= 20) {
+    availableSlots.push({ start: currentPointer, end: latestWorkTime, duration: latestWorkTime - currentPointer });
+  }
+
+  // 2. Queue actual user-defined tasks
+  const needToList = Array.isArray(prefs.need_to_items) ? prefs.need_to_items : [];
+  const shouldDoList = Array.isArray(prefs.should_do_items) ? prefs.should_do_items : [];
+  const likeToList = Array.isArray(prefs.like_to_items) ? prefs.like_to_items : [];
+
+  const taskQueue = [];
+
+  needToList.forEach((item) => {
+    taskQueue.push({
+      title: item.name,
+      tier: 'have_to',
+      kind: 'deep',
+      duration: Number(item.duration) || (isShortFocus ? 45 : isLongFocus ? 105 : 90),
+    });
+  });
+
+  shouldDoList.forEach((item) => {
+    taskQueue.push({
+      title: item.name,
+      tier: 'need_to',
+      kind: 'deep',
+      duration: Number(item.duration) || (isShortFocus ? 35 : isLongFocus ? 90 : 60),
+    });
+  });
+
+  likeToList.forEach((item) => {
+    taskQueue.push({
+      title: item.name,
+      tier: 'like_to',
+      kind: 'short',
+      duration: Number(item.duration) || (isShortFocus ? 30 : 45),
+    });
+  });
+
+  // Schedule queue into open slots
+  for (const slot of availableSlots) {
+    let slotPtr = slot.start;
+    const slotEnd = slot.end;
+
+    while (taskQueue.length > 0 && slotPtr + 20 <= slotEnd) {
+      const task = taskQueue.shift();
+      const remainingSlot = slotEnd - slotPtr;
+      const taskDur = Math.min(task.duration, remainingSlot);
+
+      if (taskDur < 20) break;
+
+      if (shouldSplit && taskDur >= 50 && task.tier !== 'like_to') {
+        const step1Dur = Math.round(taskDur * 0.4);
+        const step2Dur = taskDur - step1Dur - breakMins;
+
+        addBlock({
+          taskId: null,
+          title: `Start ${task.title}`,
+          kind: task.kind,
+          tier: task.tier,
+          startMins: slotPtr,
+          endMins: slotPtr + step1Dur,
+        });
+        slotPtr += step1Dur;
+
+        if (step2Dur >= 20 && slotPtr + breakMins + step2Dur <= slotEnd) {
+          addBlock({
+            taskId: null,
+            title: 'Rest & Pause',
+            kind: 'break',
+            tier: 'like_to',
+            startMins: slotPtr,
+            endMins: slotPtr + breakMins,
+          });
+          slotPtr += breakMins;
+
+          addBlock({
+            taskId: null,
+            title: `${task.title} (Deep Work)`,
+            kind: task.kind,
+            tier: task.tier,
+            startMins: slotPtr,
+            endMins: slotPtr + step2Dur,
+          });
+          slotPtr += step2Dur;
+        }
+      } else {
+        addBlock({
+          taskId: null,
+          title: task.title,
+          kind: task.kind,
+          tier: task.tier,
+          startMins: slotPtr,
+          endMins: slotPtr + taskDur,
+        });
+        slotPtr += taskDur;
+      }
+
+      if (slotPtr + breakMins < slotEnd && taskQueue.length > 0) {
+        addBlock({
+          taskId: null,
+          title: 'Break',
+          kind: 'break',
+          tier: 'like_to',
+          startMins: slotPtr,
+          endMins: slotPtr + breakMins,
+        });
+        slotPtr += breakMins;
+      }
+    }
+  }
+
+  // 3. Add Wind Down before bedtime
+  const lastTaskEnd = items.length > 0
+    ? Math.max(...items.map((i) => {
+        const d = new Date(i.end_time);
+        return d.getHours() * 60 + d.getMinutes();
+      }))
+    : wakeMins;
+
+  const windDownStart = Math.max(lastTaskEnd, sleepMins - windDownMins);
+  if (windDownStart < sleepMins) {
+    addBlock({
+      taskId: null,
+      title: 'Wind Down',
+      kind: 'decompression',
+      tier: 'like_to',
+      startMins: windDownStart,
+      endMins: sleepMins,
     });
   }
 
-  items.push(
-    // Deep work: DSA
-    {
-      id: uid(), task_id: DSA_ID, title: 'DSA Practice',
-      kind: 'deep', tier: 'need_to',
-      start_time: isoTime(dateObj, 16, 15), end_time: isoTime(dateObj, 17, 45),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // Gym
-    {
-      id: uid(), task_id: null, title: 'Gym',
-      kind: 'fixed', tier: 'have_to',
-      start_time: isoTime(dateObj, 18), end_time: isoTime(dateObj, 19),
-      status: 'scheduled', is_fixed: true, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // Break
-    {
-      id: uid(), task_id: null, title: 'Dinner & Rest',
-      kind: 'break', tier: 'like_to',
-      start_time: isoTime(dateObj, 19), end_time: isoTime(dateObj, 19, 45),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // DBMS session
-    {
-      id: uid(), task_id: DBMS_ID, title: 'DBMS Assignment',
-      kind: 'deep', tier: 'have_to',
-      start_time: isoTime(dateObj, 19, 45), end_time: isoTime(dateObj, 21, 15),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // Guitar (protected hobby time)
-    {
-      id: uid(), task_id: GUITAR_ID, title: 'Guitar Practice',
-      kind: 'short', tier: 'like_to',
-      start_time: isoTime(dateObj, 21, 15), end_time: isoTime(dateObj, 22),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // Decompression
-    {
-      id: uid(), task_id: null, title: 'Wind Down',
-      kind: 'decompression', tier: 'like_to',
-      start_time: isoTime(dateObj, 22), end_time: isoTime(dateObj, 22, 30),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    },
-    // Maths (short session)
-    {
-      id: uid(), task_id: MATHS_ID, title: 'Maths Revision',
-      kind: 'short', tier: 'need_to',
-      start_time: isoTime(dateObj, 22, 30), end_time: isoTime(dateObj, 23, 15),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    }
-  );
+  // Sort chronologically
+  items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
 
   return {
     id: uid(),
@@ -218,6 +400,17 @@ function loadStoredState() {
   let loadedOnboarded = null;
 
   try {
+    const rawPrefs = localStorage.getItem(STORAGE_KEY_PREFS);
+    if (rawPrefs) loadedPrefs = JSON.parse(rawPrefs);
+  } catch { /* ignore */ }
+
+  if (loadedPrefs) {
+    preferences = { ...DEFAULT_PREFERENCES, ...loadedPrefs };
+  } else {
+    preferences = { ...DEFAULT_PREFERENCES };
+  }
+
+  try {
     const rawTasks = localStorage.getItem(STORAGE_KEY_TASKS);
     if (rawTasks) loadedTasks = JSON.parse(rawTasks);
   } catch { /* ignore */ }
@@ -225,11 +418,6 @@ function loadStoredState() {
   try {
     const rawSchedules = localStorage.getItem(STORAGE_KEY_SCHEDULES);
     if (rawSchedules) loadedSchedules = JSON.parse(rawSchedules);
-  } catch { /* ignore */ }
-
-  try {
-    const rawPrefs = localStorage.getItem(STORAGE_KEY_PREFS);
-    if (rawPrefs) loadedPrefs = JSON.parse(rawPrefs);
   } catch { /* ignore */ }
 
   try {
@@ -251,28 +439,16 @@ function loadStoredState() {
   return {
     tasks: loadedTasks || JSON.parse(JSON.stringify(INITIAL_TASKS)),
     schedules: loadedSchedules || fallbackSchedules,
-    preferences: loadedPrefs || {
-      wake_time: '07:00',
-      sleep_time: '23:30',
-      focus_length: 90,
-      prefer_long_sessions: true,
-      allow_splitting: true,
-      juggles: ['classes', 'gym', 'assignments'],
-      daily_load_cap_mins: 360, // 6 hours
-      protected_hobby_mins_week: 120, // 2 hours
-      best_time_of_day: 'morning', // 'morning' | 'afternoon' | 'evening'
-      weekend_mode: 'light', // 'light' | 'normal' | 'off'
-    },
+    preferences: preferences,
     onboarded: loadedOnboarded ?? false,
   };
 }
 
 const initialState = loadStoredState();
-let tasks = initialState.tasks;
-let schedules = initialState.schedules;
-let preferences = initialState.preferences;
-let onboarded = initialState.onboarded;
-let notes = [];
+tasks = initialState.tasks;
+schedules = initialState.schedules;
+preferences = initialState.preferences;
+onboarded = initialState.onboarded;
 
 try {
   const rawNotes = localStorage.getItem(STORAGE_KEY_NOTES);
@@ -398,18 +574,42 @@ export async function getSchedule(date) {
 }
 
 export async function generateSchedule(date) {
-  await delay();
-  const dateStr = date ? (typeof date === 'string' ? date : ymd(date)) : ymd(todayDate());
-  const existing = schedules.findIndex((s) => s.date === dateStr);
-  const targetDate = new Date(dateStr + 'T00:00:00');
-  const newSchedule = buildScheduleItems(targetDate, 1);
-  if (existing >= 0) {
-    schedules[existing] = newSchedule;
-  } else {
-    schedules.push(newSchedule);
+  await delay(150);
+  const todayObj = todayDate();
+
+  if (date) {
+    const dateStr = typeof date === 'string' ? date : ymd(date);
+    const targetDate = new Date(dateStr + 'T00:00:00');
+    const newSchedule = buildScheduleItems(targetDate, 1);
+    const existing = schedules.findIndex((s) => s.date === dateStr);
+    if (existing >= 0) {
+      schedules[existing] = newSchedule;
+    } else {
+      schedules.push(newSchedule);
+    }
+    persistState();
+    return newSchedule;
   }
+
+  // When called without date (e.g. from onboarding finish), generate 7-day week
+  let todaySchedule = null;
+  for (let i = 0; i < 7; i++) {
+    const targetDate = addDays(todayObj, i);
+    const dateStr = ymd(targetDate);
+    const daySched = buildScheduleItems(targetDate, 1);
+    const existing = schedules.findIndex((s) => s.date === dateStr);
+    if (existing >= 0) {
+      schedules[existing] = daySched;
+    } else {
+      schedules.push(daySched);
+    }
+    if (i === 0) {
+      todaySchedule = daySched;
+    }
+  }
+
   persistState();
-  return newSchedule;
+  return todaySchedule;
 }
 
 /* =========================================================================
@@ -491,7 +691,7 @@ export async function closeDay(dateStr) {
   const untickedItems = [];
 
   sched.items.forEach((item) => {
-    if (item.is_fixed) return;
+    if (item.is_fixed || item.kind === 'break' || item.kind === 'decompression') return;
     if (item.done) {
       doneItems.push(item);
     } else {
@@ -499,12 +699,12 @@ export async function closeDay(dateStr) {
     }
   });
 
-  // Sort unticked items by tier priority: Have to (highest) -> Need to -> Like to
+  // Sort unticked items by tier priority: have_to -> need_to -> like_to
   const tierRank = { have_to: 1, need_to: 2, like_to: 3 };
   untickedItems.sort((a, b) => (tierRank[a.tier] || 2) - (tierRank[b.tier] || 2));
 
   const movedList = [];
-  const edgeCases = []; // issues where no slot fits before deadline, or moved twice
+  const edgeCases = [];
 
   // Horizon: 7 days starting tomorrow
   const startDate = addDays(closedDateObj, 1);
@@ -522,25 +722,11 @@ export async function closeDay(dateStr) {
       });
     }
 
-    // Search chronological days in planning horizon
     let placed = false;
 
     for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
       const candidateDate = addDays(startDate, dayOffset);
       const candidateDateStr = ymd(candidateDate);
-
-      // Check deadline
-      if (item.task_id) {
-        const taskObj = tasks.find((t) => t.id === item.task_id);
-        if (taskObj && taskObj.deadline) {
-          const dlTime = new Date(taskObj.deadline).getTime();
-          const dayStart = new Date(candidateDateStr + 'T00:00:00').getTime();
-          if (dayStart > dlTime) {
-            // Can't place past deadline
-            continue;
-          }
-        }
-      }
 
       // Find or build candidate schedule
       let candSched = schedules.find((s) => s.date === candidateDateStr);
@@ -549,49 +735,71 @@ export async function closeDay(dateStr) {
         schedules.push(candSched);
       }
 
+      // Check if candidate schedule already contains an active occurrence of this task
+      const existingCandItem = candSched.items.find(
+        (i) => i.title && i.title.toLowerCase() === item.title.toLowerCase() && !i.is_fixed && i.status !== 'displaced'
+      );
+
+      if (existingCandItem) {
+        // Already scheduled on candidate day — update metadata/move_count to avoid duplicate copy
+        existingCandItem.move_count = moveCount;
+        existingCandItem.displacement_reason = `Left from ${weekdayName}, so carried forward.`;
+        candSched.version = (candSched.version || 1) + 1;
+
+        // Mark item in current day as displaced
+        item.status = 'displaced';
+        item.displacement_reason = `Moved to ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}`;
+
+        movedList.push({
+          title: item.title,
+          targetDate: candidateDateStr,
+          targetDayName: candidateDate.toLocaleDateString('en-US', { weekday: 'long' }),
+        });
+
+        placed = true;
+        break;
+      }
+
       // Check daily load cap
       const currentStudyMins = candSched.items
         .filter((i) => !i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression')
         .reduce((sum, i) => sum + calcMins(i.start_time, i.end_time), 0);
 
       const cap = preferences.daily_load_cap_mins || 360;
-      if (currentStudyMins + itemDuration > cap) {
-        continue; // Exceeds cap
+      if (currentStudyMins + itemDuration > cap && dayOffset < 6) {
+        continue;
       }
 
-      // Find a slot inside wake & sleep that doesn't overlap fixed commitments + 5 min buffer
-      const wakeMins = parseTimeToMins(preferences.wake_time || '07:00');
-      const sleepMins = parseTimeToMins(preferences.sleep_time || '23:30');
+      // Find open interval inside candidate day
+      const candWake = parseTimeToMins(preferences.wake_time || '07:00');
+      const candSleep = parseTimeToMins(preferences.sleep_time || '23:30');
+      const latestWork = candSleep - 30;
 
-      // Candidate start candidates (e.g., preference best_time_of_day: morning 9am, afternoon 14pm, evening 19pm)
-      let candidateStarts = [16 * 60 + 15, 19 * 60 + 45, 10 * 60, 14 * 60, 21 * 60];
-      if (preferences.best_time_of_day === 'morning') {
-        candidateStarts = [9 * 60, 10 * 60 + 30, 16 * 60 + 15, 19 * 60 + 45, 14 * 60];
-      } else if (preferences.best_time_of_day === 'evening') {
-        candidateStarts = [19 * 60, 20 * 60 + 30, 16 * 60 + 15, 10 * 60, 14 * 60];
-      }
+      // Collect busy periods
+      const candBusy = [];
+      candSched.items.forEach((it) => {
+        const s = parseTimeToMins(it.start_time.split('T')[1].slice(0, 5));
+        const e = parseTimeToMins(it.end_time.split('T')[1].slice(0, 5));
+        candBusy.push({ start: s, end: e });
+      });
+      candBusy.sort((a, b) => a.start - b.start);
 
       let freeStart = null;
-      for (const slotStart of candidateStarts) {
-        const slotEnd = slotStart + itemDuration;
-        if (slotStart < wakeMins || slotEnd > sleepMins) continue;
+      let ptr = candWake;
 
-        // Check overlap with fixed commitments (+ 5 min buffer)
-        const overlaps = candSched.items.some((other) => {
-          if (!other.is_fixed) return false;
-          const otherStart = parseTimeToMins(other.start_time.split('T')[1].slice(0, 5)) - 5;
-          const otherEnd = parseTimeToMins(other.end_time.split('T')[1].slice(0, 5)) + 5;
-          return Math.max(slotStart, otherStart) < Math.min(slotEnd, otherEnd);
-        });
-
-        if (!overlaps) {
-          freeStart = slotStart;
+      for (const b of candBusy) {
+        if (b.start - ptr >= itemDuration) {
+          freeStart = ptr;
           break;
         }
+        ptr = Math.max(ptr, b.end);
+      }
+
+      if (freeStart === null && latestWork - ptr >= itemDuration) {
+        freeStart = ptr;
       }
 
       if (freeStart !== null) {
-        // Place in candidate schedule
         const newStartH = Math.floor(freeStart / 60);
         const newStartM = freeStart % 60;
         const freeEnd = freeStart + itemDuration;
@@ -602,13 +810,13 @@ export async function closeDay(dateStr) {
 
         candSched.items.push({
           id: uid(),
-          task_id: item.task_id,
+          task_id: item.task_id || null,
           title: item.title,
           kind: item.kind,
           tier: item.tier,
           start_time: isoTime(candidateDate, newStartH, newStartM),
           end_time: isoTime(candidateDate, newEndH, newEndM),
-          status: 'displaced',
+          status: 'scheduled',
           is_fixed: false,
           done: false,
           displaced_by_task_id: null,
@@ -616,9 +824,10 @@ export async function closeDay(dateStr) {
           move_count: moveCount,
         });
 
+        candSched.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
         candSched.version = (candSched.version || 1) + 1;
 
-        // Mark item in current day as moved
+        // Mark item in current day as displaced
         item.status = 'displaced';
         item.displacement_reason = `Moved to ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}`;
 
@@ -653,10 +862,14 @@ export async function closeDay(dateStr) {
     success: true,
     doneCount: doneItems.length,
     movedCount: movedList.length,
-    summary: summarySentence,
+    moved: movedList,
     movedList,
+    edge_cases: edgeCases,
     edgeCases,
+    summary: summarySentence,
     what_changed: whatChanged,
+    closed_date: dateStr,
+    weekday: weekdayName,
   };
 }
 
@@ -697,7 +910,7 @@ export async function getWeekSpread(baseDate) {
         } else if (item.kind === 'break' || item.kind === 'decompression') {
           totalRestMins += mins;
         }
-        if (item.tier === 'like_to' || (item.title && item.title.toLowerCase().includes('guitar'))) {
+        if (item.tier === 'like_to') {
           totalHobbyMins += mins;
         }
       });
@@ -706,13 +919,46 @@ export async function getWeekSpread(baseDate) {
     days.push(dayInfo);
   }
 
-  // Groups for 7-circle rows
-  const groupDefinitions = [
-    { key: 'dsa', title: 'DSA Practice', test: (i) => i.title && i.title.toLowerCase().includes('dsa') },
-    { key: 'dbms', title: 'DBMS Assignment', test: (i) => i.title && i.title.toLowerCase().includes('dbms') },
-    { key: 'maths', title: 'Maths Revision', test: (i) => i.title && i.title.toLowerCase().includes('math') },
-    { key: 'guitar', title: 'Guitar / Creative', test: (i) => i.title && (i.title.toLowerCase().includes('guitar') || i.tier === 'like_to') },
+  // Groups for 7-circle rows derived dynamically from user preferences or scheduled items
+  const userItems = [
+    ...(preferences.need_to_items || []),
+    ...(preferences.should_do_items || []),
+    ...(preferences.like_to_items || []),
   ];
+
+  let groupDefinitions = userItems.slice(0, 4).map((item) => {
+    const title = typeof item === 'string' ? item : item.name || item.title;
+    return {
+      key: title.toLowerCase().replace(/\s+/g, '_'),
+      title: title,
+      test: (i) => i.title && i.title.toLowerCase().includes(title.toLowerCase()),
+    };
+  });
+
+  if (groupDefinitions.length === 0) {
+    const distinctTitles = new Set();
+    days.forEach((d) =>
+      d.items.forEach((i) => {
+        if (!i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression' && i.title) {
+          distinctTitles.add(i.title);
+        }
+      })
+    );
+    groupDefinitions = Array.from(distinctTitles)
+      .slice(0, 4)
+      .map((title) => ({
+        key: title.toLowerCase().replace(/\s+/g, '_'),
+        title: title,
+        test: (i) => i.title && i.title.toLowerCase() === title.toLowerCase(),
+      }));
+  }
+
+  if (groupDefinitions.length === 0) {
+    groupDefinitions = [
+      { key: 'deep', title: 'Focus Sessions', test: (i) => i.kind === 'deep' },
+      { key: 'like_to', title: 'Protected Free Time', test: (i) => i.tier === 'like_to' },
+    ];
+  }
 
   const groups = groupDefinitions.map((g) => {
     let completedSessions = 0;
@@ -728,11 +974,6 @@ export async function getWeekSpread(baseDate) {
     });
 
     let sentence = `${g.title}: ${completedSessions} session${completedSessions !== 1 ? 's' : ''} completed on closed days.`;
-    if (g.key === 'guitar') {
-      const hobbyHours = (totalHobbyMins / 60).toFixed(1);
-      sentence = `Guitar: ${completedSessions} sessions, you kept your ${hobbyHours} protected hours.`;
-    }
-
     return {
       title: g.title,
       circles,
@@ -749,13 +990,13 @@ export async function getWeekSpread(baseDate) {
   // Reflection generator
   const noticeParagraph =
     Number(deepWorkHours) >= 4
-      ? `Orbit noticed you preserved solid focus blocks during your afternoon classes without cutting into sleep. Your protected guitar time stayed intact even through assignment deadlines.`
+      ? `Orbit noticed you preserved solid focus blocks during your day without cutting into sleep. Your personal buffer and protected time stayed intact.`
       : `Orbit noticed your rhythms leaned toward shorter, adaptive blocks this week to keep energy sustainable while commitments shifted.`;
 
   const suggestion =
     Number(deepWorkHours) >= 6
-      ? `Next week, consider adding an extra 15-minute decompression cushion after long labs to keep your evenings calm.`
-      : `Next week, we can protect one uninterrupted 90-minute morning window before midday lectures.`;
+      ? `Next week, consider adding an extra 15-minute decompression cushion after long commitments to keep your evenings calm.`
+      : `Next week, we can protect one uninterrupted 90-minute morning window before midday commitments.`;
 
   return {
     days,
@@ -770,22 +1011,204 @@ export async function getWeekSpread(baseDate) {
 }
 
 /* =========================================================================
-   4 & 5. RE-PLANNING ENGINE (Tomorrow onward only, triggered by notes/feedback)
+   4 & 5. RE-PLANNING ENGINE (Tomorrow onward & active days, triggered by notes/feedback)
    ========================================================================= */
 
 export async function replanSchedule({ reason, feedbackText, clarification }) {
   await delay(400);
 
   const whatChanged = [];
-
   const textLower = `${feedbackText || ''} ${clarification || ''} ${reason || ''}`.toLowerCase();
 
+  // Helper to find known task title referenced in text
+  const allKnownTaskTitles = [];
+  const userItems = [
+    ...(preferences.need_to_items || []),
+    ...(preferences.should_do_items || []),
+    ...(preferences.like_to_items || []),
+  ];
+  userItems.forEach((it) => {
+    const name = typeof it === 'string' ? it : it.name || it.title;
+    if (name) allKnownTaskTitles.push(name);
+  });
+  schedules.forEach((s) => {
+    s.items.forEach((it) => {
+      if (!it.is_fixed && it.title && !allKnownTaskTitles.includes(it.title)) {
+        allKnownTaskTitles.push(it.title);
+      }
+    });
+  });
+
+  // Check if text mentions a specific task
+  let matchedTaskTitle = null;
+  for (const title of allKnownTaskTitles) {
+    if (textLower.includes(title.toLowerCase())) {
+      matchedTaskTitle = title;
+      break;
+    }
+  }
+
+  // Check for commitment mentions (e.g. "hospital rotation", "classes", "lecture")
+  let mentionedCommitment = null;
+  const fixedList = [
+    ...(preferences.fixed_commitments || []),
+    ...(preferences.monday_commitments || []),
+    ...(preferences.tuesday_commitments || []),
+    ...(preferences.wednesday_commitments || []),
+    ...(preferences.thursday_commitments || []),
+    ...(preferences.friday_commitments || []),
+  ];
+  for (const fc of fixedList) {
+    const cName = fc.name || fc.title;
+    if (cName && textLower.includes(cName.toLowerCase())) {
+      mentionedCommitment = cName;
+      break;
+    }
+  }
+
+  const isMoveRequest =
+    textLower.includes('move') ||
+    textLower.includes('tired') ||
+    textLower.includes('exhaust') ||
+    textLower.includes('after') ||
+    textLower.includes('later') ||
+    textLower.includes('shift') ||
+    textLower.includes('reschedule') ||
+    textLower.includes('too heavy');
+
+  // Case 1: Specific task relocation requested
+  if (matchedTaskTitle && isMoveRequest) {
+    let movedSuccessfully = false;
+
+    // Search across all unclosed schedules (today + next 4 days)
+    for (let offset = 0; offset <= 4; offset++) {
+      const sourceDate = addDays(todayDate(), offset);
+      const sourceDateStr = ymd(sourceDate);
+      const sourceSched = schedules.find((s) => s.date === sourceDateStr);
+      if (!sourceSched || sourceSched.is_closed) continue;
+
+      const itemIdx = sourceSched.items.findIndex(
+        (i) => i.title && i.title.toLowerCase() === matchedTaskTitle.toLowerCase() && i.status !== 'displaced'
+      );
+
+      if (itemIdx >= 0) {
+        const itemToMove = sourceSched.items[itemIdx];
+        const itemDuration = calcMins(itemToMove.start_time, itemToMove.end_time) || 60;
+        const sourceDayName = sourceDate.toLocaleDateString('en-US', { weekday: 'long' });
+
+        // Find candidate destination day (starting next day)
+        for (let destOffset = offset + 1; destOffset <= offset + 4; destOffset++) {
+          const destDate = addDays(todayDate(), destOffset);
+          const destDateStr = ymd(destDate);
+          let destSched = schedules.find((s) => s.date === destDateStr);
+          if (!destSched) {
+            destSched = buildScheduleItems(destDate, 1);
+            schedules.push(destSched);
+          }
+          if (destSched.is_closed) continue;
+
+          const destDayName = destDate.toLocaleDateString('en-US', { weekday: 'long' });
+
+          // Check if destination schedule already contains an active occurrence of this task
+          const existingDestItem = destSched.items.find(
+            (i) => i.title && i.title.toLowerCase() === itemToMove.title.toLowerCase() && !i.is_fixed && i.status !== 'displaced'
+          );
+
+          if (existingDestItem) {
+            // Already scheduled on destination day — update metadata/move count to avoid duplicate
+            existingDestItem.move_count = (existingDestItem.move_count || 0) + 1;
+            existingDestItem.displacement_reason = `Rescheduled from ${sourceDayName} based on your feedback.`;
+            destSched.version = (destSched.version || 1) + 1;
+
+            // Remove/displace from sourceSched
+            sourceSched.items.splice(itemIdx, 1);
+            sourceSched.version = (sourceSched.version || 1) + 1;
+
+            const reasonContext = mentionedCommitment ? ` to protect your recovery time after ${mentionedCommitment}` : ' to protect your recovery time';
+            whatChanged.push(`Moved "${matchedTaskTitle}" from ${sourceDayName} to ${destDayName}${reasonContext}.`);
+
+            movedSuccessfully = true;
+            break;
+          }
+
+          // Find open slot in destSched
+          const destWake = parseTimeToMins(preferences.wake_time || '07:00');
+          const destSleep = parseTimeToMins(preferences.sleep_time || '23:30');
+          const latestDestWork = destSleep - 30;
+
+          const busy = [];
+          destSched.items.forEach((it) => {
+            const s = parseTimeToMins(it.start_time.split('T')[1].slice(0, 5));
+            const e = parseTimeToMins(it.end_time.split('T')[1].slice(0, 5));
+            busy.push({ start: s, end: e });
+          });
+          busy.sort((a, b) => a.start - b.start);
+
+          let freeStart = null;
+          let ptr = destWake;
+          for (const b of busy) {
+            if (b.start - ptr >= itemDuration) {
+              freeStart = ptr;
+              break;
+            }
+            ptr = Math.max(ptr, b.end);
+          }
+          if (freeStart === null && latestDestWork - ptr >= itemDuration) {
+            freeStart = ptr;
+          }
+
+          if (freeStart !== null) {
+            const destDayName = destDate.toLocaleDateString('en-US', { weekday: 'long' });
+            const newStartH = Math.floor(freeStart / 60);
+            const newStartM = freeStart % 60;
+            const freeEnd = freeStart + itemDuration;
+            const newEndH = Math.floor(freeEnd / 60);
+            const newEndM = freeEnd % 60;
+
+            destSched.items.push({
+              id: uid(),
+              task_id: itemToMove.task_id || null,
+              title: itemToMove.title,
+              kind: itemToMove.kind || 'deep',
+              tier: itemToMove.tier || 'need_to',
+              start_time: isoTime(destDate, newStartH, newStartM),
+              end_time: isoTime(destDate, newEndH, newEndM),
+              status: 'scheduled',
+              is_fixed: false,
+              done: false,
+              displaced_by_task_id: null,
+              displacement_reason: `Rescheduled from ${sourceDayName} based on your feedback.`,
+              move_count: (itemToMove.move_count || 0) + 1,
+            });
+
+            destSched.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+            destSched.version = (destSched.version || 1) + 1;
+
+            // Remove/displace from sourceSched
+            sourceSched.items.splice(itemIdx, 1);
+            sourceSched.version = (sourceSched.version || 1) + 1;
+
+            const reasonContext = mentionedCommitment ? ` to protect your recovery time after ${mentionedCommitment}` : ' to protect your recovery time';
+            whatChanged.push(`Moved "${matchedTaskTitle}" from ${sourceDayName} to ${destDayName}${reasonContext}.`);
+
+            movedSuccessfully = true;
+            break;
+          }
+        }
+
+        if (movedSuccessfully) break;
+      }
+    }
+  }
+
+  // Case 2: General fatigue / overload
   const isTiredOrOverwhelmed =
     textLower.includes('too much') ||
     textLower.includes('tired') ||
     textLower.includes('exhaust') ||
     textLower.includes('drained') ||
-    textLower.includes('plate');
+    textLower.includes('plate') ||
+    textLower.includes('overwhelm');
 
   const isWrongTime =
     textLower.includes('wrong time') ||
@@ -799,44 +1222,51 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
     textLower.includes('longer break') ||
     textLower.includes('more rest');
 
-  // Loop through next 4 days (tomorrow onward)
-  for (let offset = 1; offset <= 4; offset++) {
-    const candidateDate = addDays(todayDate(), offset);
-    const dateStr = ymd(candidateDate);
-    const sched = schedules.find((s) => s.date === dateStr);
-    if (!sched || sched.is_closed) continue; // NEVER change past days or closed days
+  if (whatChanged.length === 0) {
+    for (let offset = 1; offset <= 4; offset++) {
+      const candidateDate = addDays(todayDate(), offset);
+      const dateStr = ymd(candidateDate);
+      const sched = schedules.find((s) => s.date === dateStr);
+      if (!sched || sched.is_closed) continue;
 
-    sched.version = (sched.version || 1) + 1;
+      sched.version = (sched.version || 1) + 1;
 
-    if (isTiredOrOverwhelmed) {
-      preferences.daily_load_cap_mins = Math.max(180, (preferences.daily_load_cap_mins || 360) - 60);
+      if (isTiredOrOverwhelmed) {
+        preferences.daily_load_cap_mins = Math.max(180, (preferences.daily_load_cap_mins || 360) - 60);
 
-      // Lighten non-urgent items
-      const lowerItem = sched.items.find((i) => !i.is_fixed && i.tier !== 'have_to' && i.status !== 'displaced');
-      if (lowerItem) {
-        lowerItem.status = 'displaced';
-        lowerItem.displacement_reason = `Moved to your next deep-work block to prevent overload.`;
-        whatChanged.push(`Lightened ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}: shifted "${lowerItem.title}" to protect your energy.`);
-      }
-    } else if (isWrongTime) {
-      // Shift deep work toward user's best time
-      const deepItem = sched.items.find((i) => i.kind === 'deep' && !i.is_fixed);
-      if (deepItem) {
-        deepItem.start_time = isoTime(candidateDate, 10, 0);
-        deepItem.end_time = isoTime(candidateDate, 11, 30);
-        whatChanged.push(`Adjusted deep focus on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 10:00 AM based on your peak energy.`);
-      }
-    } else if (isShortBreaks) {
-      const breakItem = sched.items.find((i) => i.kind === 'break');
-      if (breakItem) {
-        breakItem.end_time = isoTime(candidateDate, 20, 15);
-        whatChanged.push(`Extended recovery break on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 45 minutes.`);
+        const lowerItem = sched.items.find((i) => !i.is_fixed && i.tier !== 'have_to' && i.status !== 'displaced');
+        if (lowerItem) {
+          lowerItem.status = 'displaced';
+          lowerItem.displacement_reason = `Moved to your next deep-work block to prevent overload.`;
+          whatChanged.push(
+            `Lightened ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })}: shifted "${lowerItem.title}" to protect your energy.`
+          );
+        }
+      } else if (isWrongTime) {
+        const deepItem = sched.items.find((i) => i.kind === 'deep' && !i.is_fixed);
+        if (deepItem) {
+          deepItem.start_time = isoTime(candidateDate, 10, 0);
+          deepItem.end_time = isoTime(candidateDate, 11, 30);
+          whatChanged.push(
+            `Adjusted deep focus on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 10:00 AM based on your peak energy.`
+          );
+        }
+      } else if (isShortBreaks) {
+        const breakItem = sched.items.find((i) => i.kind === 'break');
+        if (breakItem) {
+          breakItem.end_time = isoTime(candidateDate, 20, 15);
+          whatChanged.push(
+            `Extended recovery break on ${candidateDate.toLocaleDateString('en-US', { weekday: 'short' })} to 45 minutes.`
+          );
+        }
       }
     }
   }
 
   if (whatChanged.length === 0) {
-    whatChanged.push('Reviewed upcoming days from tomorrow onward. Your schedule is well balanced with no immediate shifts required.');
+    whatChanged.push(
+      'Reviewed upcoming days from tomorrow onward. Your schedule is well balanced with no immediate shifts required.'
+    );
   }
 
   persistState();
@@ -854,8 +1284,8 @@ export function checkNoteVague(text) {
   const lower = (text || '').toLowerCase();
   const knownKeywords = [
     'too much', 'plate', 'tired', 'exhaust', 'wrong time', 'morning', 'evening',
-    'break', 'rest', 'sick', 'heavy', 'light', 'guitar', 'gym', 'os practical',
-    'prefer', 'deadline', 'assignment', 'homework', 'drained'
+    'break', 'rest', 'sick', 'heavy', 'light', 'move', 'shift', 'reschedule',
+    'prefer', 'deadline', 'assignment', 'homework', 'drained', 'overwhelm', 'rotation', 'practice'
   ];
   const hasKeyword = knownKeywords.some((k) => lower.includes(k));
   return !hasKeyword;
@@ -865,115 +1295,64 @@ export async function disrupt(text, date) {
   await delay();
   const dateStr = date ? (typeof date === 'string' ? date : ymd(date)) : ymd(todayDate());
   const targetIdx = schedules.findIndex((s) => s.date === dateStr);
-  const target = targetIdx >= 0 ? schedules[targetIdx] : schedules[0];
+  let target = targetIdx >= 0 ? schedules[targetIdx] : schedules[0];
 
   if (!target) {
-    const fresh = buildScheduleItems(todayDate(), 1);
-    schedules.push(fresh);
+    target = buildScheduleItems(todayDate(), 1);
+    schedules.push(target);
     persistState();
-    return {
-      schedule: fresh,
-      what_changed: ['Generated a new schedule for today.'],
-      at_risk: [],
-    };
   }
 
   // Clone the schedule and bump version
   const updated = JSON.parse(JSON.stringify(target));
-  updated.version += 1;
+  updated.version = (updated.version || 1) + 1;
 
-  const isOsPractical = text.toLowerCase().includes('os practical') || text.toLowerCase().includes('practical');
-  const isExhausted = text.toLowerCase().includes('exhaust') || text.toLowerCase().includes('tired') || text.toLowerCase().includes('sick');
+  const textLower = (text || '').toLowerCase();
+  const isExhausted = textLower.includes('exhaust') || textLower.includes('tired') || textLower.includes('sick');
 
   const what_changed = [];
   const at_risk = [];
 
-  if (isOsPractical) {
-    const osPracticalTask = {
-      id: uid(), title: 'OS Practical Prep', category: 'academic',
-      task_type: 'deadline', tier: 'have_to', deadline: isoTime(addDays(todayDate(), 1), 9),
-      estimated_duration: 120, priority: 5, status: 'pending', is_fixed: false,
-    };
-    tasks.push(osPracticalTask);
+  if (isExhausted) {
+    const nonFixedItems = updated.items.filter((i) => !i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression');
+    if (nonFixedItems.length > 0) {
+      const itemToDisplace = nonFixedItems[nonFixedItems.length - 1];
+      itemToDisplace.displacement_reason = 'Moved to tomorrow because you need recovery time tonight.';
+      itemToDisplace.status = 'displaced';
 
-    const mathsIdx = updated.items.findIndex((i) => i.title === 'Maths Revision');
-    if (mathsIdx >= 0) {
-      updated.items[mathsIdx].displaced_by_task_id = osPracticalTask.id;
-      updated.items[mathsIdx].displacement_reason =
-        'Moved to tomorrow evening because your OS practical came up and needs priority today.';
-      updated.items[mathsIdx].status = 'displaced';
-    }
-
-    updated.items.push({
-      id: uid(), task_id: osPracticalTask.id, title: 'OS Practical Prep',
-      kind: 'deep', tier: 'have_to',
-      start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
-      end_time: isoTime(new Date(target.date + 'T00:00'), 23, 45),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    });
-
-    what_changed.push(
-      'Added "OS Practical Prep" (2 hours) to your evening deep-work slot.',
-      'Moved "Maths Revision" to tomorrow evening — your OS practical needs priority today.',
-      'Everything else stays the same. Your DBMS session and gym are untouched.'
-    );
-
-    at_risk.push({
-      id: MATHS_ID,
-      title: 'Maths Revision',
-      reason: 'Pushed to tomorrow — make sure you have a free slot then.',
-    });
-  } else if (isExhausted) {
-    const mathsIdx = updated.items.findIndex((i) => i.title === 'Maths Revision');
-    if (mathsIdx >= 0) {
-      updated.items[mathsIdx].displacement_reason =
-        'Moved to tomorrow because you need recovery time tonight.';
-      updated.items[mathsIdx].status = 'displaced';
-    }
-
-    updated.items.push({
-      id: uid(), task_id: null, title: 'Extra Rest',
-      kind: 'decompression', tier: 'like_to',
-      start_time: isoTime(new Date(target.date + 'T00:00'), 22, 15),
-      end_time: isoTime(new Date(target.date + 'T00:00'), 23),
-      status: 'scheduled', is_fixed: false, done: false,
-      displaced_by_task_id: null, displacement_reason: null, move_count: 0,
-    });
-
-    what_changed.push(
-      'Removed "Maths Revision" from tonight and moved it to tomorrow.',
-      'Added extra rest time in the evening to help you recover.',
-      "Your DBMS session stays — it's closer to the deadline. But take it easy."
-    );
-  } else {
-    const deepBlocks = updated.items.filter((i) => (i.kind === 'deep' || i.kind === 'short') && !i.is_fixed);
-    if (deepBlocks.length > 0) {
-      const lowest = deepBlocks.reduce((a, b) => {
-        const aTask = tasks.find((t) => t.id === a.task_id);
-        const bTask = tasks.find((t) => t.id === b.task_id);
-        return (aTask?.priority || 3) <= (bTask?.priority || 3) ? a : b;
-      });
-      const idx = updated.items.findIndex((i) => i.id === lowest.id);
-      if (idx >= 0) {
-        updated.items[idx].displacement_reason =
-          `Moved to the next available slot because: "${text}"`;
-        updated.items[idx].status = 'displaced';
-      }
-      what_changed.push(
-        `Reorganised your schedule based on: "${text}"`,
-        `Moved "${lowest.title}" to a later slot to make room.`,
-        'The rest of your plan stays on track.'
-      );
+      what_changed.push(`Removed "${itemToDisplace.title}" from tonight and moved it to tomorrow.`);
+      what_changed.push('Added extra rest time in the evening to help you recover.');
     } else {
-      what_changed.push(
-        `Noted: "${text}". Your schedule looks manageable as-is — no changes needed right now.`
-      );
+      what_changed.push('Added extra recovery time to tonight to help you rest.');
+    }
+  } else {
+    // Check if user is adding an urgent task / assignment
+    const newTaskTitle = text.length > 30 ? text.slice(0, 30) + '…' : text;
+    const deepBlocks = updated.items.filter((i) => (i.kind === 'deep' || i.kind === 'short') && !i.is_fixed);
+
+    if (deepBlocks.length > 0) {
+      const lowest = deepBlocks[deepBlocks.length - 1];
+      lowest.displacement_reason = `Moved to make room for your priority: "${newTaskTitle}"`;
+      lowest.status = 'displaced';
+
+      what_changed.push(`Reorganised your schedule based on: "${text}"`);
+      what_changed.push(`Moved "${lowest.title}" to a later slot to make room.`);
+      what_changed.push('The rest of your plan stays on track.');
+
+      at_risk.push({
+        id: lowest.id,
+        title: lowest.title,
+        reason: 'Pushed to a later slot — make sure you have a free window.',
+      });
+    } else {
+      what_changed.push(`Noted: "${text}". Your schedule looks manageable as-is — no changes needed right now.`);
     }
   }
 
   if (targetIdx >= 0) {
     schedules[targetIdx] = updated;
+  } else {
+    schedules.push(updated);
   }
   persistState();
 
@@ -986,34 +1365,39 @@ export async function disrupt(text, date) {
 
 export async function sendFeedback(text) {
   await delay();
-
-  const isExhausted = text.toLowerCase().includes('exhaust') ||
-                       text.toLowerCase().includes('tired') ||
-                       text.toLowerCase().includes('couldn\'t study') ||
-                       text.toLowerCase().includes('rough');
+  const textLower = (text || '').toLowerCase();
+  const isExhausted =
+    textLower.includes('exhaust') ||
+    textLower.includes('tired') ||
+    textLower.includes("couldn't study") ||
+    textLower.includes('rough');
 
   if (isExhausted) {
     const todaySchedule = schedules.find((s) => s.date === ymd(todayDate()));
     if (todaySchedule) {
-      const mathsIdx = todaySchedule.items.findIndex((i) => i.title === 'Maths Revision' && i.status !== 'displaced');
-      if (mathsIdx >= 0) {
-        todaySchedule.items[mathsIdx].displacement_reason =
-          'Moved to your next deep-work block so you can recover tonight.';
-        todaySchedule.items[mathsIdx].status = 'displaced';
+      const candidate = todaySchedule.items.find((i) => !i.is_fixed && i.status !== 'displaced');
+      if (candidate) {
+        candidate.displacement_reason = 'Moved to your next deep-work block so you can recover tonight.';
+        candidate.status = 'displaced';
+        persistState();
+        return {
+          message: `That's completely okay. Everyone has days like that. I've lightened your evening — your "${candidate.title}" moved to your next free deep-work slot. Focus on rest tonight; you'll pick it up fresh tomorrow.`,
+          schedule_updated: true,
+        };
       }
-      persistState();
     }
 
     return {
-      message: "That's completely okay. Everyone has days like that. I've lightened your evening — your Maths revision moved to your next free deep-work slot. Focus on rest tonight; you'll pick it up fresh tomorrow.",
+      message: "That's completely okay. Everyone has days like that. I've lightened your evening. Focus on rest tonight; you'll pick it up fresh tomorrow.",
       schedule_updated: true,
     };
   }
 
-  const isGood = text.toLowerCase().includes('good') ||
-                  text.toLowerCase().includes('great') ||
-                  text.toLowerCase().includes('works') ||
-                  text.toLowerCase().includes('productive');
+  const isGood =
+    textLower.includes('good') ||
+    textLower.includes('great') ||
+    textLower.includes('works') ||
+    textLower.includes('productive');
 
   if (isGood) {
     return {
@@ -1117,11 +1501,11 @@ export async function saveNote({ text, kind, rating }) {
   if (isExhausted) {
     const todaySchedule = schedules.find((s) => s.date === ymd(todayDate()));
     if (todaySchedule) {
-      const mathsIdx = todaySchedule.items.findIndex((i) => i.title === 'Maths Revision' && i.status !== 'displaced');
-      if (mathsIdx >= 0) {
-        todaySchedule.items[mathsIdx].displacement_reason =
+      const candidate = todaySchedule.items.find((i) => !i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression' && i.status !== 'displaced');
+      if (candidate) {
+        candidate.displacement_reason =
           'Moved to your next deep-work block so you can recover tonight.';
-        todaySchedule.items[mathsIdx].status = 'displaced';
+        candidate.status = 'displaced';
       }
     }
   }
@@ -1145,16 +1529,10 @@ export async function savePreferences(prefs) {
 
 export async function saveOnboarding(answers) {
   await delay();
-  if (answers.wake_time) preferences.wake_time = answers.wake_time;
-  if (answers.sleep_time) preferences.sleep_time = answers.sleep_time;
-  if (answers.focus_length) preferences.focus_length = answers.focus_length;
-  if (answers.prefer_long_sessions !== undefined) preferences.prefer_long_sessions = answers.prefer_long_sessions;
-  if (answers.allow_splitting !== undefined) preferences.allow_splitting = answers.allow_splitting;
-  if (answers.juggles) preferences.juggles = answers.juggles;
-  if (answers.anything_else) preferences.anything_else = answers.anything_else;
-  if (answers.daily_load_cap_mins) preferences.daily_load_cap_mins = answers.daily_load_cap_mins;
-  if (answers.protected_hobby_mins_week) preferences.protected_hobby_mins_week = answers.protected_hobby_mins_week;
-  if (answers.best_time_of_day) preferences.best_time_of_day = answers.best_time_of_day;
+  preferences = {
+    ...preferences,
+    ...answers,
+  };
   onboarded = true;
   persistState();
   return preferences;
