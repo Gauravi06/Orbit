@@ -4,7 +4,6 @@ import {
   Calendar,
   Sparkles,
   CheckSquare,
-  Palette,
   LogOut,
   Sliders,
   ChevronDown,
@@ -99,17 +98,6 @@ export function Shell({ children }) {
               <CheckSquare size={15} strokeWidth={1.5} />
               <span>Tasks</span>
             </NavLink>
-            {IS_DEV && (
-              <NavLink
-                to="/design"
-                className={({ isActive }) =>
-                  `shell-nav-link ${isActive ? 'active' : ''}`
-                }
-              >
-                <Palette size={15} strokeWidth={1.5} />
-                <span>Design</span>
-              </NavLink>
-            )}
           </nav>
 
           {/* Right actions: ThemeToggle + User Menu */}
@@ -190,16 +178,6 @@ export function Shell({ children }) {
                     </div>
                   </div>
 
-                  {IS_DEV && (
-                    <Link
-                      to="/design"
-                      className="shell-dropdown-item"
-                      onClick={() => setMenuOpen(false)}
-                    >
-                      <Palette size={13} strokeWidth={1.5} />
-                      <span>Design Guide</span>
-                    </Link>
-                  )}
                   {IS_MOCK && (
                     <button
                       type="button"
@@ -267,17 +245,6 @@ export function Shell({ children }) {
           <CheckSquare size={18} strokeWidth={1.5} />
           <span>Tasks</span>
         </NavLink>
-        {IS_DEV && (
-          <NavLink
-            to="/design"
-            className={({ isActive }) =>
-              `shell-mobile-link ${isActive ? 'active' : ''}`
-            }
-          >
-            <Palette size={18} strokeWidth={1.5} />
-            <span>Design</span>
-          </NavLink>
-        )}
       </nav>
     </div>
   );
