@@ -22,12 +22,12 @@ from app.services.rule_engine import (
     generate_plan,
     validate_plan,
 )
+from app.api.routes.preferences import load_user_rule_prefs
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
 IST = timezone(timedelta(hours=5, minutes=30))
 HORIZON = 7                      # plan today + 7 days
-PREFS = Prefs(sleep=time(23, 0)) # hardcoded for the demo (no onboarding yet)
 
 
 # ---------------------------------------------------------------- request models
@@ -75,7 +75,10 @@ def _load(db: Session, user: User):
     """
     rows = (
         db.query(Task)
-        .filter(Task.user_id == user.id, Task.status != "done")
+        .filter(
+            Task.user_id == user.id,
+            (Task.status.is_(None)) | (~Task.status.in_(["completed", "done"])),
+        )
         .all()
     )
     fixed: List[FixedBlock] = []
@@ -257,6 +260,7 @@ def _at_risk(result, tasks: List[PlanTask]):
 # ---------------------------------------------------------------- shared logic
 def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str = ""):
     now = _now()
+    prefs = load_user_rule_prefs(db, user)
     fixed, tasks = _load(db, user)
     blocks = [FixedBlock(b.label, _naive(b.start), _naive(b.end), 0) for b in payload.blocks]
     caps = {c.day: c.max_minutes for c in payload.caps}
@@ -274,7 +278,7 @@ def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str 
         .all()
     ]
 
-    result = generate_plan(tasks, fixed + blocks, PREFS, now, HORIZON, caps)
+    result = generate_plan(tasks, fixed + blocks, prefs, now, HORIZON, caps)
     displaced = _diff(before, result.placements, blocks)
 
     if text and displaced:  # one batched Gemini call; falls back to templates
@@ -285,7 +289,7 @@ def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str 
             displaced[k] = (by, r, old_s)
 
     problems = validate_plan(
-        result.placements, {t.id: t for t in tasks}, fixed + blocks, PREFS, now
+        result.placements, {t.id: t for t in tasks}, fixed + blocks, prefs, now
     )
     _save(db, user, result, now, displaced)
     return _response(db, user, now, _at_risk(result, tasks), problems)
@@ -306,9 +310,10 @@ def generate(
     current_user: User = Depends(get_current_user),
 ):
     now = _now()
+    prefs = load_user_rule_prefs(db, current_user)
     fixed, tasks = _load(db, current_user)
-    result = generate_plan(tasks, fixed, PREFS, now, HORIZON)
-    problems = validate_plan(result.placements, {t.id: t for t in tasks}, fixed, PREFS, now)
+    result = generate_plan(tasks, fixed, prefs, now, HORIZON)
+    problems = validate_plan(result.placements, {t.id: t for t in tasks}, fixed, prefs, now)
     _save(db, current_user, result, now, {})
     return _response(db, current_user, now, _at_risk(result, tasks), problems)
 

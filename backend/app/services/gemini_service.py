@@ -3,7 +3,7 @@ import os
 from datetime import date, datetime
 from typing import List, Tuple
 
-import requests
+import httpx
 
 try:
     from dotenv import load_dotenv
@@ -24,14 +24,14 @@ def _call_json(prompt: str):
     if not key:
         raise GeminiError("GEMINI_API_KEY is not set")
     try:
-        r = requests.post(
+        r = httpx.post(
             URL.format(model=MODEL),
             headers={"x-goog-api-key": key, "Content-Type": "application/json"},
             json={
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2},
             },
-            timeout=25,
+            timeout=25.0,
         )
         r.raise_for_status()
         text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
