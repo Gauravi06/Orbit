@@ -1,14 +1,27 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Lock,
   Sparkles,
   Trash2,
   Plus,
   Clock,
   Calendar,
+  Zap,
+  ArrowRight,
+  AlertTriangle,
+  Loader2,
+  CheckCircle2,
+  Check,
 } from 'lucide-react';
-import { getTasks, createTask, deleteTask, generateSchedule, errText, parseTaskSemantics } from '../api/client';
+import {
+  getTasks,
+  createTask,
+  deleteTask,
+  updateTask,
+  generateSchedule,
+  errText,
+  parseTaskSemantics,
+} from '../api/client';
 import './Tasks.css';
 
 export function Tasks() {
@@ -17,28 +30,16 @@ export function Tasks() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState('task'); // 'task' | 'fixed'
 
-  // Quick add input
-  const [quickText, setQuickText] = useState('');
+  // Left card: "What’s new?" natural-language text input
+  const [nlText, setNlText] = useState('');
 
-  // Form states
+  // Right card: "Prefer more control?" structured form fields
   const [form, setForm] = useState({
     title: '',
-    tier: 'have_to', // 'have_to' (Need To) | 'need_to' (Should Do) | 'like_to' (Like To)
     estimated_duration: 60,
-    frequency: 'One-time',
-    weekly_day: 'Tuesday',
     deadline: '',
     natural_language_note: '',
-  });
-
-  const [fixedForm, setFixedForm] = useState({
-    title: '',
-    category: 'academic',
-    date: new Date().toISOString().split('T')[0],
-    time: '09:00',
-    estimated_duration: 180,
   });
 
   const navigate = useNavigate();
@@ -76,41 +77,72 @@ export function Tasks() {
     }
   };
 
-  // Quick smart guess parser
-  const handleQuickAdd = (e) => {
+  // Left card handler: "What's new?"
+  // Quick natural-language entry: uses existing parseTaskSemantics to extract title, duration, and notes.
+  // Note: This creates a "have_to" (Need To) task with a deadline if parseable or default.
+  const handleQuickAdd = async (e) => {
     e.preventDefault();
-    if (!quickText.trim()) return;
+    if (!nlText.trim() || submitting) return;
 
-    const parsed = parseTaskSemantics(quickText);
-    const duration = parsed.estimated_duration || 60;
-    const tier = parsed.tier || 'have_to';
-    const frequency = parsed.frequency || 'One-time';
+    setSubmitting(true);
+    setError('');
+    setMessage('');
 
-    // Extract clean title from beginning before punctuation/keywords
-    let title = quickText.trim();
-    const parts = quickText.split(/[,;\-–]/);
-    if (parts.length > 1 && parts[0].trim().length > 1) {
-      title = parts[0].trim();
+    try {
+      const parsed = parseTaskSemantics(nlText.trim());
+      const duration = parsed?.estimated_duration || 60;
+
+      // Extract title from input
+      let title = nlText.trim();
+      const parts = nlText.split(/[,;\-–\n]/);
+      if (parts.length > 1 && parts[0].trim().length > 1) {
+        title = parts[0].trim();
+      }
+
+      // Check if deadline date string was mentioned or default to upcoming Friday
+      let deadline = null;
+      if (parsed?.deadline) {
+        deadline = parsed.deadline;
+      } else {
+        // If the text mentions "due" or "by", find next occurrence or default to Friday 23:59
+        const d = new Date();
+        const day = d.getDay();
+        const diff = (5 - day + 7) % 7 || 7;
+        const due = new Date(d);
+        due.setDate(d.getDate() + diff);
+        due.setHours(23, 59, 0, 0);
+        deadline = due.toISOString().slice(0, 16);
+      }
+
+      const payload = {
+        title,
+        tier: 'have_to',
+        priority: 5,
+        estimated_duration: duration,
+        duration,
+        frequency: 'One-time',
+        task_type: 'deadline',
+        deadline,
+        natural_language_note: nlText.trim(),
+        semantic_preferences: parsed && !parsed.isEmpty ? parsed : null,
+        is_fixed: false,
+      };
+
+      await createTask(payload);
+      setMessage(`Added "${title}" (Need To, due ${new Date(deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}).`);
+      setNlText('');
+      await loadTasksData();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setSubmitting(false);
     }
-
-    setForm({
-      title,
-      estimated_duration: duration,
-      tier,
-      frequency,
-      weekly_day: 'Tuesday',
-      deadline: '',
-      natural_language_note: quickText.trim(),
-    });
-    setActiveTab('task');
-    const tierLabel = tier === 'have_to' ? 'Need To' : tier === 'like_to' ? 'Like To' : 'Should Do';
-    setMessage(`Parsed "${title}" as ${tierLabel} · ${duration} mins · ${frequency}. Review and click Add Task.`);
-    setQuickText('');
   };
 
-  const handleAddTask = async (e) => {
+  // Right card handler: "Prefer more control?"
+  const handleStructuredAdd = async (e) => {
     e.preventDefault();
-    if (!form.title.trim()) return;
+    if (!form.title.trim() || submitting) return;
 
     setSubmitting(true);
     setError('');
@@ -121,43 +153,16 @@ export function Tasks() {
         ? parseTaskSemantics(form.natural_language_note.trim(), form)
         : null;
 
-      let effectiveDuration = Number(form.estimated_duration) || 60;
-      let effectiveFrequency = form.frequency || 'One-time';
-      let effectiveTier = form.tier || 'have_to';
-
-      if (parsed && !parsed.isEmpty) {
-        if (parsed.estimated_duration && (!form.estimated_duration || form.estimated_duration === 60)) {
-          effectiveDuration = parsed.estimated_duration;
-        }
-      }
-
-      const freqLower = (effectiveFrequency || '').toLowerCase().trim();
-      const isExplicitRecurring =
-        freqLower === 'daily' ||
-        freqLower === 'every day' ||
-        freqLower === 'everyday' ||
-        freqLower === 'weekdays' ||
-        freqLower === 'weekends' ||
-        freqLower === 'weekly' ||
-        freqLower === '2x a week' ||
-        freqLower === '2-3x a week' ||
-        freqLower === '3-4x a week' ||
-        freqLower === 'regularly' ||
-        freqLower === 'recurring';
-
-      // RULE 1: Tasks are One-time by default unless explicit recurrence was chosen
-      const finalFrequency = isExplicitRecurring ? effectiveFrequency : 'One-time';
-      const taskType = isExplicitRecurring ? 'growth' : 'deadline';
+      const duration = Number(form.estimated_duration) || 60;
 
       const payload = {
         title: form.title.trim(),
-        tier: effectiveTier,
-        priority: effectiveTier === 'have_to' ? 5 : effectiveTier === 'need_to' ? 3 : 1,
-        estimated_duration: effectiveDuration,
-        duration: effectiveDuration,
-        frequency: finalFrequency,
-        task_type: taskType,
-        days: finalFrequency === 'Weekly' ? form.weekly_day : null,
+        tier: 'have_to', // Always "Need To" per requirements
+        priority: 5,
+        estimated_duration: duration,
+        duration,
+        frequency: 'One-time',
+        task_type: 'deadline',
         deadline: form.deadline ? form.deadline : null,
         natural_language_note: form.natural_language_note.trim() ? form.natural_language_note.trim() : null,
         semantic_preferences: parsed && !parsed.isEmpty ? parsed : null,
@@ -165,13 +170,10 @@ export function Tasks() {
       };
 
       await createTask(payload);
-      setMessage('Task added. Added to your schedule.');
+      setMessage(`"${form.title.trim()}" added to your tasks.`);
       setForm({
         title: '',
-        tier: 'have_to',
         estimated_duration: 60,
-        frequency: 'One-time',
-        weekly_day: 'Tuesday',
         deadline: '',
         natural_language_note: '',
       });
@@ -183,41 +185,26 @@ export function Tasks() {
     }
   };
 
-  const handleDeleteTask = async (id) => {
+  const handleCompleteTask = async (task) => {
     try {
-      await deleteTask(id);
+      if (typeof updateTask === 'function') {
+        await updateTask(task.id, { done: true, status: 'completed' });
+      } else {
+        await deleteTask(task.id);
+      }
+      setMessage(`Marked "${task.title}" as complete.`);
       await loadTasksData();
     } catch (err) {
       setError(errText(err));
     }
   };
 
-  const handleAddFixed = async (e) => {
-    e.preventDefault();
-    if (!fixedForm.title.trim()) return;
-
-    setSubmitting(true);
-    setError('');
-    setMessage('');
-
+  const handleDeleteTask = async (id) => {
     try {
-      const payload = {
-        title: fixedForm.title.trim(),
-        category: fixedForm.category,
-        task_type: 'fixed',
-        priority: 3,
-        estimated_duration: Number(fixedForm.estimated_duration),
-        deadline: `${fixedForm.date}T${fixedForm.time}:00`,
-        is_fixed: true,
-      };
-
-      await createTask(payload);
-      setMessage('Fixed commitment saved.');
+      await deleteTask(id);
       await loadTasksData();
     } catch (err) {
       setError(errText(err));
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -233,399 +220,388 @@ export function Tasks() {
     }
   };
 
-  const fixedList = tasks.filter((t) => t.is_fixed);
-  const plainList = tasks.filter((t) => !t.is_fixed);
+  // Task-list rules:
+  // Show ONLY active "Need To" tasks with an actual due date.
+  // Exclude study goals, "Should Do", "Like To", recurring habits, and fixed commitments without deadlines.
+  // Remove completed tasks.
+  const plateTasks = tasks.filter((t) => {
+    if (t.is_fixed) return false;
+    if (t.done || t.status === 'completed') return false;
+
+    // Must be "Need To" (tier: 'have_to' or priority >= 4)
+    const isNeedTo = t.tier === 'have_to' || (!t.tier && Number(t.priority) >= 4);
+    if (!isNeedTo) return false;
+
+    // Must have an actual due date
+    if (!t.deadline) return false;
+
+    // Exclude recurring habits
+    const freq = (t.frequency || '').toLowerCase().trim();
+    if (freq && freq !== 'one-time' && freq !== 'one-off') return false;
+
+    // Exclude general study session/block kinds
+    const kind = (t.kind || '').toLowerCase();
+    if (kind === 'break' || kind === 'routine' || kind === 'decompression' || kind === 'deep') return false;
+
+    return true;
+  });
+
+  const pastelClasses = ['card-yellow', 'card-pink', 'card-lavender', 'card-lime'];
 
   return (
     <div className="tasks-page">
-      {/* Header */}
-      <div className="tasks-header">
-        <div>
-          <h1 className="tasks-title">Tasks & Commitments</h1>
-          <p className="tasks-subtitle">
-            Manage your assignments, study goals, and fixed schedules.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={handleUpdateSchedule}
-          disabled={submitting}
-        >
-          {submitting ? 'Updating…' : 'Update My Plan'}
-        </button>
+      {/* Hand-drawn student-life doodles around edges (in decorative areas only, never over forms) */}
+      <div className="tasks-doodles-layer" aria-hidden="true">
+        <svg className="tasks-doodle tasks-doodle-star-tr" width="54" height="54" viewBox="0 0 54 54" fill="none">
+          <path
+            d="M27 3L32 18L48 20L36 31L40 47L27 38L14 47L18 31L6 20L22 18L27 3Z"
+            fill="#FFE066"
+            stroke="#111111"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+          <circle cx="27" cy="25" r="2.5" fill="#111111" />
+        </svg>
+
+        <svg className="tasks-doodle tasks-doodle-sparkle-l" width="46" height="46" viewBox="0 0 46 46" fill="none">
+          <path
+            d="M23 4V42M4 23H42M9 9L37 37M9 37L37 9"
+            stroke="#FF90E8"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+        </svg>
+
+        <svg className="tasks-doodle tasks-doodle-swirl-r" width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <path
+            d="M6 22C6 13 13 6 22 6C31 6 38 13 38 22C38 31 31 38 22 38C15 38 11 32 11 26C11 20 17 16 23 16"
+            stroke="#B8F34A"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+          />
+        </svg>
+
+        <svg className="tasks-doodle tasks-doodle-coffee-bl" width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <path d="M10 16H30V30C30 33 27 36 23 36H17C13 36 10 33 10 30V16Z" fill="#B79CFF" stroke="#111111" strokeWidth="2.5" />
+          <path d="M30 20H35C37 20 38 21 38 23V25C38 27 37 28 35 28H30" stroke="#111111" strokeWidth="2.5" strokeLinecap="round" />
+          <path d="M15 10C15 12 17 13 17 15" stroke="#111111" strokeWidth="2" strokeLinecap="round" />
+          <path d="M21 8C21 11 23 12 23 15" stroke="#111111" strokeWidth="2" strokeLinecap="round" />
+        </svg>
       </div>
 
+      {/* Hero Header: "Balance without Burnout" */}
+      <header className="tasks-feature-header">
+        <div className="tasks-header-content">
+          <div className="tasks-header-top-row">
+            <span className="tasks-header-tag">
+              <Zap size={13} strokeWidth={2.5} />
+              Orbit Task Engine
+            </span>
+          </div>
+          <h1 className="tasks-title">Balance without Burnout</h1>
+          <p className="tasks-subtitle">
+            More commitments? Sudden deadline? New hobby? We can find a way to do it all.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="pop-btn pop-btn-lime"
+          onClick={handleUpdateSchedule}
+          disabled={submitting}
+          title="Regenerate today's plan with current tasks"
+        >
+          {submitting ? (
+            <>
+              <Loader2 size={16} className="spin" strokeWidth={2.2} />
+              <span>Updating…</span>
+            </>
+          ) : (
+            <>
+              <span>Update My Plan</span>
+              <ArrowRight size={16} strokeWidth={2.2} />
+            </>
+          )}
+        </button>
+      </header>
+
       {message && (
-        <div style={{ backgroundColor: 'var(--sage-bg)', border: '1px solid var(--sage)', padding: 'var(--space-3)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--text-xs)', color: 'var(--ink)' }}>
+        <div
+          style={{
+            background: 'var(--pop-lime)',
+            border: 'var(--pop-border)',
+            borderRadius: 'var(--pop-radius-sm)',
+            padding: '12px 16px',
+            boxShadow: 'var(--pop-shadow-sm)',
+            fontWeight: 700,
+            fontSize: '14px',
+            color: '#111111',
+            zIndex: 1,
+          }}
+          role="status"
+        >
           {message}
         </div>
       )}
 
       {error && (
-        <div className="form-error" style={{ fontSize: 'var(--text-sm)' }}>
-          {error}
+        <div className="pop-error-banner" role="alert" style={{ zIndex: 1 }}>
+          <AlertTriangle size={18} strokeWidth={2.5} />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Quick Add Guess Box */}
-      <div className="tasks-quick-box">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-          <Sparkles size={14} style={{ color: 'var(--accent)' }} />
-          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Quick Add
-          </span>
-        </div>
-        <form onSubmit={handleQuickAdd} className="tasks-quick-form">
-          <input
-            type="text"
-            className="input"
-            placeholder='e.g. "Problem Set 60m due Friday" or "Reading 30m Daily"'
-            value={quickText}
-            onChange={(e) => setQuickText(e.target.value)}
-          />
-          <button type="submit" className="btn btn-secondary" style={{ flexShrink: 0 }}>
-            Fill Form
-          </button>
-        </form>
-      </div>
-
-      {/* Main Grid: Form Left, Lists Right */}
-      <div className="tasks-grid">
-        {/* Form Card */}
-        <div className="tasks-form-card">
-          <div className="tasks-form-tabs">
-            <button
-              type="button"
-              className={`tasks-form-tab ${activeTab === 'task' ? 'active' : ''}`}
-              onClick={() => setActiveTab('task')}
-            >
-              Study Task
-            </button>
-            <button
-              type="button"
-              className={`tasks-form-tab ${activeTab === 'fixed' ? 'active' : ''}`}
-              onClick={() => setActiveTab('fixed')}
-            >
-              Fixed Commitment
-            </button>
+      {/* Two-Column Grid with Equal-Width Cards */}
+      <div className="tasks-entry-grid">
+        {/* Left: "What’s new?" (Yellow #FFE066 card with natural-language text area & lime action) */}
+        <div className="tasks-grid-card card-whats-new">
+          <div className="tasks-card-header">
+            <div className="tasks-card-title-wrap">
+              <h2 className="tasks-card-title">What’s new?</h2>
+              <p className="tasks-card-subtitle">
+                Describe a sudden assignment or deadline in your own words.
+              </p>
+            </div>
+            <span className="tasks-card-badge">
+              <Sparkles size={11} strokeWidth={2.2} />
+              Quick Add
+            </span>
           </div>
 
-          {activeTab === 'task' ? (
-            <form onSubmit={handleAddTask} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-              <div className="form-group">
-                <label htmlFor="task-title">Task Name</label>
-                <input
-                  id="task-title"
-                  type="text"
-                  className="input"
-                  placeholder="e.g. Physiology Notes Revision"
-                  value={form.title}
-                  onChange={(e) => setForm({ ...form, title: e.target.value })}
-                  required
-                />
-              </div>
+          <form onSubmit={handleQuickAdd} className="tasks-quick-entry-form">
+            <textarea
+              className="tasks-nl-textarea"
+              placeholder="DBMS assignment due Friday, about 2 hours..."
+              value={nlText}
+              onChange={(e) => setNlText(e.target.value)}
+              disabled={submitting}
+            />
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-                <div className="form-group">
-                  <label htmlFor="task-duration">Duration (mins)</label>
-                  <input
-                    id="task-duration"
-                    type="number"
-                    step="5"
-                    min="5"
-                    max="480"
-                    className="input"
-                    value={form.estimated_duration}
-                    onChange={(e) => setForm({ ...form, estimated_duration: Number(e.target.value) })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="task-tier">Priority</label>
-                  <select
-                    id="task-tier"
-                    className="input"
-                    value={form.tier}
-                    onChange={(e) => setForm({ ...form, tier: e.target.value })}
-                  >
-                    <option value="have_to">Need To (High)</option>
-                    <option value="need_to">Should Do (Medium)</option>
-                    <option value="like_to">Like To (Protected Hobby)</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="task-frequency">Frequency</label>
-                <select
-                  id="task-frequency"
-                  className="input"
-                  value={form.frequency}
-                  onChange={(e) => setForm({ ...form, frequency: e.target.value })}
-                >
-                  <option value="One-time">One-time / One-off</option>
-                  <option value="Daily">Daily</option>
-                  <option value="Weekly">Weekly (Specific Day)</option>
-                  <option value="2x a week">2x a week</option>
-                  <option value="2-3x a week">2-3x a week</option>
-                  <option value="3-4x a week">3-4x a week</option>
-                  <option value="Weekdays">Weekdays only (Mon–Fri)</option>
-                  <option value="Weekends">Weekends only (Sat–Sun)</option>
-                </select>
-              </div>
-
-              {form.frequency === 'Weekly' && (
-                <div className="form-group">
-                  <label htmlFor="task-weekly-day">Select Day of Week</label>
-                  <select
-                    id="task-weekly-day"
-                    className="input"
-                    value={form.weekly_day}
-                    onChange={(e) => setForm({ ...form, weekly_day: e.target.value })}
-                  >
-                    <option value="Monday">Monday</option>
-                    <option value="Tuesday">Tuesday</option>
-                    <option value="Wednesday">Wednesday</option>
-                    <option value="Thursday">Thursday</option>
-                    <option value="Friday">Friday</option>
-                    <option value="Saturday">Saturday</option>
-                    <option value="Sunday">Sunday</option>
-                  </select>
-                </div>
-              )}
-
-              <div className="form-group">
-                <label htmlFor="task-deadline">Deadline (Optional)</label>
-                <input
-                  id="task-deadline"
-                  type="datetime-local"
-                  className="input"
-                  value={form.deadline}
-                  onChange={(e) => setForm({ ...form, deadline: e.target.value })}
-                />
-              </div>
-
-              <div className="form-group">
-                <label htmlFor="task-note">Anything Orbit should know? (Optional)</label>
-                <textarea
-                  id="task-note"
-                  className="input"
-                  rows={3}
-                  placeholder="e.g. Prefer mornings, split this into two blocks, avoid doing this after college..."
-                  value={form.natural_language_note}
-                  onChange={(e) => setForm({ ...form, natural_language_note: e.target.value })}
-                />
-                <div style={{ marginTop: 'var(--space-2)' }}>
-                  {form.natural_language_note.trim() ? (
-                    (() => {
-                      const parsed = parseTaskSemantics(form.natural_language_note, form);
-                      return parsed.summary ? (
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            fontSize: 'var(--text-xs)',
-                            color: 'var(--sage-dark, #2b6cb0)',
-                            backgroundColor: 'var(--sage-bg, #ebf8ff)',
-                            padding: '6px 10px',
-                            borderRadius: 'var(--radius-sm, 6px)',
-                            border: '1px solid var(--border-color, #bee3f8)',
-                          }}
-                        >
-                          <Sparkles size={13} strokeWidth={2} style={{ flexShrink: 0, color: 'var(--primary, #3182ce)' }} />
-                          <span><strong>Orbit understood:</strong> {parsed.summary}</span>
-                        </div>
-                      ) : (
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-muted, #718096)', padding: '2px 0' }}>
-                          Orbit will use your usual planning preferences.
-                        </div>
-                      );
-                    })()
-                  ) : (
-                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-muted, #718096)', padding: '2px 0' }}>
-                      Orbit will use your usual planning preferences.
-                    </div>
-                  )}
-                </div>
-              </div>
-
+            <div className="tasks-quick-action-row">
+              <span className="tasks-parse-notice">
+                Adds as a Need To deadline task
+              </span>
               <button
                 type="submit"
-                className="btn btn-primary"
-                disabled={submitting}
-                style={{ marginTop: 'var(--space-2)' }}
+                className="tasks-action-btn-lime"
+                disabled={submitting || !nlText.trim()}
               >
-                {submitting ? 'Adding…' : 'Add Task'}
+                {submitting ? (
+                  <>
+                    <Loader2 size={15} className="spin" strokeWidth={2.2} />
+                    <span>Adding…</span>
+                  </>
+                ) : (
+                  <>
+                    <span>Add Task</span>
+                    <ArrowRight size={15} strokeWidth={2.2} />
+                  </>
+                )}
               </button>
-            </form>
-          ) : (
-            <form onSubmit={handleAddFixed} style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-              <div className="form-group">
-                <label htmlFor="fixed-title">Commitment Name</label>
-                <input
-                  id="fixed-title"
-                  type="text"
-                  className="input"
-                  placeholder="e.g. Morning Hospital Shift, Physics Lab"
-                  value={fixedForm.title}
-                  onChange={(e) => setFixedForm({ ...fixedForm, title: e.target.value })}
-                  required
-                />
-              </div>
+            </div>
+          </form>
+        </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-                <div className="form-group">
-                  <label htmlFor="fixed-date">Date</label>
-                  <input
-                    id="fixed-date"
-                    type="date"
-                    className="input"
-                    value={fixedForm.date}
-                    onChange={(e) => setFixedForm({ ...fixedForm, date: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="form-group">
-                  <label htmlFor="fixed-time">Start Time</label>
-                  <input
-                    id="fixed-time"
-                    type="time"
-                    className="input"
-                    value={fixedForm.time}
-                    onChange={(e) => setFixedForm({ ...fixedForm, time: e.target.value })}
-                    required
-                  />
-                </div>
-              </div>
+        {/* Right: "Prefer more control?" (Lavender #B79CFF card with structured fields & black action) */}
+        <div className="tasks-grid-card card-more-control">
+          <div className="tasks-card-header">
+            <div className="tasks-card-title-wrap">
+              <h2 className="tasks-card-title">Prefer more control?</h2>
+              <p className="tasks-card-subtitle">
+                Set exact parameters, estimated duration, and due dates.
+              </p>
+            </div>
+            <span className="tasks-card-badge">
+              <Plus size={11} strokeWidth={2.2} />
+              Structured
+            </span>
+          </div>
 
-              <div className="form-group">
-                <label htmlFor="fixed-duration">Duration (minutes)</label>
+          <form onSubmit={handleStructuredAdd} className="tasks-control-form">
+            <div className="tasks-control-field">
+              <label htmlFor="ctrl-title" className="tasks-control-label">
+                Task Name *
+              </label>
+              <input
+                id="ctrl-title"
+                type="text"
+                className="tasks-control-input"
+                placeholder="e.g. Physiology Notes Revision"
+                value={form.title}
+                onChange={(e) => setForm({ ...form, title: e.target.value })}
+                required
+                disabled={submitting}
+              />
+            </div>
+
+            <div className="tasks-control-row-2">
+              <div className="tasks-control-field">
+                <label htmlFor="ctrl-duration" className="tasks-control-label">
+                  <Clock size={12} strokeWidth={2.2} />
+                  Duration (mins) *
+                </label>
                 <input
-                  id="fixed-duration"
+                  id="ctrl-duration"
                   type="number"
                   step="5"
                   min="5"
                   max="480"
-                  className="input"
-                  value={fixedForm.estimated_duration}
-                  onChange={(e) => setFixedForm({ ...fixedForm, estimated_duration: Number(e.target.value) })}
+                  className="tasks-control-input"
+                  value={form.estimated_duration}
+                  onChange={(e) => setForm({ ...form, estimated_duration: Number(e.target.value) })}
                   required
+                  disabled={submitting}
                 />
               </div>
 
-              <button
-                type="submit"
-                className="btn btn-primary"
-                disabled={submitting}
-                style={{ marginTop: 'var(--space-2)' }}
-              >
-                {submitting ? 'Saving…' : 'Add Fixed Commitment'}
-              </button>
-            </form>
-          )}
-        </div>
-
-        {/* Lists Column */}
-        <div className="tasks-list-col">
-          {/* Plain Tasks Section */}
-          <div className="tasks-section">
-            <div className="tasks-section-header">
-              <h2 className="tasks-section-title">Assignments & Study Goals ({plainList.length})</h2>
+              <div className="tasks-control-field">
+                <label htmlFor="ctrl-deadline" className="tasks-control-label">
+                  <Calendar size={12} strokeWidth={2.2} />
+                  Due Date *
+                </label>
+                <input
+                  id="ctrl-deadline"
+                  type="datetime-local"
+                  className="tasks-control-input"
+                  value={form.deadline}
+                  onChange={(e) => setForm({ ...form, deadline: e.target.value })}
+                  required
+                  disabled={submitting}
+                />
+              </div>
             </div>
 
-            {loading && <div className="text-muted" style={{ fontSize: 'var(--text-sm)' }}>Loading tasks…</div>}
+            <div className="tasks-control-field">
+              <label htmlFor="ctrl-note" className="tasks-control-label">
+                Orbit Instructions (Optional)
+              </label>
+              <input
+                id="ctrl-note"
+                type="text"
+                className="tasks-control-input"
+                placeholder="e.g. Prefer mornings, split across two blocks"
+                value={form.natural_language_note}
+                onChange={(e) => setForm({ ...form, natural_language_note: e.target.value })}
+                disabled={submitting}
+              />
+            </div>
 
-            {!loading && plainList.length === 0 && (
-              <div className="text-muted" style={{ fontSize: 'var(--text-sm)', padding: 'var(--space-2) 0' }}>
-                No active tasks yet. Use the form on the left to add one.
-              </div>
-            )}
+            <button
+              type="submit"
+              className="tasks-action-btn-black"
+              disabled={submitting || !form.title.trim() || !form.deadline}
+            >
+              {submitting ? (
+                <>
+                  <Loader2 size={15} className="spin" strokeWidth={2.2} />
+                  <span>Adding…</span>
+                </>
+              ) : (
+                <>
+                  <span>Add Task</span>
+                  <ArrowRight size={15} strokeWidth={2.2} />
+                </>
+              )}
+            </button>
+          </form>
+        </div>
+      </div>
 
-            {plainList.map((t) => {
-              const tierLabel = t.tier === 'have_to' ? 'Need To' : t.tier === 'like_to' ? 'Like To' : 'Should Do';
-              const tierClass = t.tier === 'have_to' ? 'p5' : '';
+      {/* "On your plate" Section: Full-width spanning both columns */}
+      <div className="tasks-plate-section">
+        <div className="tasks-plate-header">
+          <h2 className="tasks-plate-title">
+            <span>On your plate</span>
+            <span className="tasks-plate-count-badge">
+              {plateTasks.length} Need To deadline{plateTasks.length !== 1 ? 's' : ''}
+            </span>
+          </h2>
+        </div>
+
+        {loading && (
+          <div style={{ color: '#D6D6D6', fontSize: '14px', fontWeight: 600 }}>
+            Loading tasks…
+          </div>
+        )}
+
+        {!loading && plateTasks.length === 0 && (
+          <div className="tasks-plate-empty">
+            <div className="tasks-plate-empty-icon">
+              <CheckCircle2 size={28} strokeWidth={2.5} style={{ color: '#166451' }} />
+            </div>
+            <h3 className="tasks-plate-empty-title">Nothing on your plate</h3>
+            <p className="tasks-plate-empty-sub">
+              No active "Need To" deadline tasks right now. Add assignments or upcoming deadlines above to balance your week.
+            </p>
+          </div>
+        )}
+
+        {!loading && plateTasks.length > 0 && (
+          <div className="tasks-plate-grid">
+            {plateTasks.map((t, idx) => {
+              const colorClass = pastelClasses[idx % pastelClasses.length];
+
               return (
-                <div key={t.id} className="tasks-item-card">
-                  <div className="tasks-item-info">
-                    <div className="tasks-item-title">{t.title}</div>
-                    <div className="tasks-item-meta">
-                      <span className={`priority-badge ${tierClass}`}>
-                        {tierLabel}
+                <div key={t.id} className={`tasks-plate-card ${colorClass}`}>
+                  <div className="tasks-plate-card-info">
+                    <div className="tasks-plate-card-top">
+                      <span className="tasks-plate-card-title">{t.title}</span>
+                      <span className="tasks-plate-pill priority-high">
+                        Need To
                       </span>
+                    </div>
+
+                    <div className="tasks-plate-card-meta">
                       <span>{t.estimated_duration || t.duration} mins</span>
                       <span>·</span>
-                      <span>{t.frequency || 'One-time'}{t.days ? ` (${t.days})` : ''}</span>
-                      {t.deadline && (
-                        <>
-                          <span>·</span>
-                          <span>Due {new Date(t.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                        </>
-                      )}
+                      <span>
+                        Due {new Date(t.deadline).toLocaleDateString('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric',
+                        })}
+                      </span>
                     </div>
+
                     {t.natural_language_note && (
-                      <div style={{ fontSize: '11px', color: 'var(--ink-muted)', fontStyle: 'italic', marginTop: 'var(--space-1)' }}>
+                      <div className="tasks-plate-card-note">
                         "{t.natural_language_note}"
                       </div>
                     )}
+
                     {t.semantic_preferences?.summary && (
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--primary, #2b6cb0)', backgroundColor: 'var(--sage-bg, #ebf8ff)', padding: '2px 6px', borderRadius: '4px', marginTop: '4px' }}>
-                        <Sparkles size={10} strokeWidth={2} />
+                      <div className="tasks-plate-card-semantic">
+                        <Sparkles size={11} strokeWidth={2.2} />
                         <span>{t.semantic_preferences.summary}</span>
                       </div>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '4px 8px', color: 'var(--ink-muted)', height: 'auto' }}
-                    onClick={() => handleDeleteTask(t.id)}
-                    aria-label={`Delete ${t.title}`}
-                  >
-                    <Trash2 size={14} />
-                  </button>
+
+                  <div className="tasks-plate-card-actions">
+                    <button
+                      type="button"
+                      className="tasks-delete-btn"
+                      onClick={() => handleCompleteTask(t)}
+                      title={`Mark "${t.title}" complete`}
+                      aria-label={`Mark ${t.title} complete`}
+                    >
+                      <Check size={16} strokeWidth={2.5} />
+                    </button>
+                    <button
+                      type="button"
+                      className="tasks-delete-btn"
+                      onClick={() => handleDeleteTask(t.id)}
+                      title={`Delete "${t.title}"`}
+                      aria-label={`Delete ${t.title}`}
+                    >
+                      <Trash2 size={16} strokeWidth={2.2} />
+                    </button>
+                  </div>
                 </div>
               );
             })}
           </div>
-
-          {/* Fixed Commitments Section */}
-          <div className="tasks-section">
-            <div className="tasks-section-header">
-              <h2 className="tasks-section-title">Fixed Commitments ({fixedList.length})</h2>
-            </div>
-
-            {fixedList.map((f) => (
-              <div key={f.id} className="tasks-item-card" style={{ backgroundColor: 'var(--surface-2)' }}>
-                <div className="tasks-item-info">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                    <Lock size={13} strokeWidth={1.5} style={{ color: 'var(--ink-muted)' }} />
-                    <span className="tasks-item-title">{f.title}</span>
-                  </div>
-                  <div className="tasks-item-meta">
-                    <span>{f.estimated_duration || f.duration} mins</span>
-                    {f.deadline && (
-                      <>
-                        <span>·</span>
-                        <span>{new Date(f.deadline).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  style={{ padding: '4px 8px', color: 'var(--ink-muted)', height: 'auto' }}
-                  onClick={() => handleDeleteTask(f.id)}
-                  aria-label={`Delete ${f.title}`}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -8,6 +8,11 @@ import {
   Loader2,
   ThumbsUp,
   Trash2,
+  Sparkles,
+  HelpCircle,
+  Clock,
+  Compass,
+  Zap,
 } from 'lucide-react';
 import {
   proposeDisruption,
@@ -17,8 +22,40 @@ import {
 } from '../api/client';
 import './Changed.css';
 
+const SUGGESTIONS = [
+  {
+    id: 'class-cancelled',
+    label: 'Class cancelled',
+    sub: 'Free block today',
+    text: 'My afternoon class was cancelled today, so I have unexpected free time.',
+    colorClass: 'card-pink',
+  },
+  {
+    id: 'feeling-exhausted',
+    label: 'Feeling exhausted',
+    sub: 'Lighten load & protect rest',
+    text: "I am feeling exhausted today. Please lighten my study load and ensure I stop on time.",
+    colorClass: 'card-lavender',
+  },
+  {
+    id: 'something-came-up',
+    label: 'Something came up',
+    sub: 'Need 1-2 hours off',
+    text: 'Something came up and I need 2 hours off this afternoon.',
+    colorClass: 'card-lime',
+  },
+  {
+    id: 'im-behind',
+    label: "I'm behind",
+    sub: 'Catch up safely',
+    text: "I'm falling behind on my deadlines and need to catch up without burning out.",
+    colorClass: 'card-yellow',
+  },
+];
+
 export function Changed() {
   const [promptText, setPromptText] = useState('');
+  const [submittedPrompt, setSubmittedPrompt] = useState('');
   const [loading, setLoading] = useState(false);
   const [approving, setApproving] = useState(false);
   const [discarding, setDiscarding] = useState(false);
@@ -35,6 +72,7 @@ export function Changed() {
     const text = textToSubmit || promptText;
     if (!text.trim()) return;
 
+    setSubmittedPrompt(text);
     setLoading(true);
     setError('');
     setProposal(null);
@@ -62,7 +100,8 @@ export function Changed() {
     setLoading(true);
     setError('');
     try {
-      const data = await proposeDisruption(promptText, null, option);
+      const activePrompt = submittedPrompt || promptText;
+      const data = await proposeDisruption(activePrompt, null, option);
       setProposal(data);
       setChoiceData(null);
     } catch (err) {
@@ -77,7 +116,8 @@ export function Changed() {
     setLoading(true);
     setError('');
     try {
-      const combined = `${promptText} (duration: ${answer})`.trim();
+      const activePrompt = submittedPrompt || promptText;
+      const combined = `${activePrompt} (duration: ${answer})`.trim();
       const data = await proposeDisruption(combined);
       if (data.needs_choice) {
         setChoiceData(data);
@@ -116,6 +156,7 @@ export function Changed() {
       setProposal(null);
       setChoiceData(null);
       setClarificationData(null);
+      setSubmittedPrompt('');
       setPromptText('');
     } catch (err) {
       setError(errText(err));
@@ -124,57 +165,122 @@ export function Changed() {
     }
   };
 
+  const handleSuggestionClick = (suggestion) => {
+    setPromptText(suggestion.text);
+    handleDisrupt(suggestion.text);
+  };
+
   return (
     <div className="changed-page">
-      {/* Header */}
-      <div className="changed-header">
-        <h1 className="changed-title">Something Changed?</h1>
-        <p className="changed-subtitle">
-          Life happens mid-week. Tell Orbit what came up in your own words, and it will
-          quietly reorganise your workload without guilt or overdue badges.
-        </p>
+      {/* Decorative sparse student-life doodles around edges */}
+      <div className="changed-doodles-layer" aria-hidden="true">
+        {/* Star doodle top-right */}
+        <svg className="changed-doodle changed-doodle-star-tr" width="54" height="54" viewBox="0 0 54 54" fill="none">
+          <path
+            d="M27 3L32 18L48 20L36 31L40 47L27 38L14 47L18 31L6 20L22 18L27 3Z"
+            fill="#FFE066"
+            stroke="#111111"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+          <circle cx="27" cy="25" r="2.5" fill="#111111" />
+        </svg>
+
+        {/* Sparkle doodle left */}
+        <svg className="changed-doodle changed-doodle-sparkle-l" width="46" height="46" viewBox="0 0 46 46" fill="none">
+          <path
+            d="M23 4V42M4 23H42M9 9L37 37M9 37L37 9"
+            stroke="#FF90E8"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+        </svg>
+
+        {/* Swirl doodle right */}
+        <svg className="changed-doodle changed-doodle-swirl-r" width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <path
+            d="M6 22C6 13 13 6 22 6C31 6 38 13 38 22C38 31 31 38 22 38C15 38 11 32 11 26C11 20 17 16 23 16"
+            stroke="#B8F34A"
+            strokeWidth="3.2"
+            strokeLinecap="round"
+          />
+        </svg>
+
+        {/* Coffee cup doodle bottom-left */}
+        <svg className="changed-doodle changed-doodle-coffee-bl" width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <path d="M10 16H30V30C30 33 27 36 23 36H17C13 36 10 33 10 30V16Z" fill="#B79CFF" stroke="#111111" strokeWidth="2.5" />
+          <path d="M30 20H35C37 20 38 21 38 23V25C38 27 37 28 35 28H30" stroke="#111111" strokeWidth="2.5" strokeLinecap="round" />
+          <path d="M15 10C15 12 17 13 17 15" stroke="#111111" strokeWidth="2" strokeLinecap="round" />
+          <path d="M21 8C21 11 23 12 23 15" stroke="#111111" strokeWidth="2" strokeLinecap="round" />
+        </svg>
       </div>
 
+      {/* Feature Header: "Plans changed?" */}
+      <header className="changed-feature-header">
+        <div className="changed-header-content">
+          <div className="changed-header-top-row">
+            <span className="changed-header-tag">
+              <Zap size={13} strokeWidth={2.5} />
+              Orbit Adaptive Flow
+            </span>
+          </div>
+          <h1 className="changed-title">Plans changed?</h1>
+          <p className="changed-subtitle">
+            Life happens mid-week. Tell Orbit what came up in your own words, and we'll quietly reorganise your schedule without guilt.
+          </p>
+        </div>
+      </header>
+
       {error && (
-        <div className="form-error" style={{ fontSize: 'var(--text-sm)' }}>
-          {error}
+        <div className="pop-error-banner" role="alert">
+          <AlertTriangle size={18} strokeWidth={2.5} />
+          <span>{error}</span>
         </div>
       )}
 
-      {/* Main Disruption Form */}
-      <div className="changed-card">
-        <h2 className="changed-card-title">Describe what happened</h2>
+      {/* Prominent Yellow Input Card with White Text Area & Black Submit Button */}
+      <div className="changed-input-card">
+        <div className="changed-input-header">
+          <h2 className="changed-input-title">Tell Orbit what's happening</h2>
+          <span className="changed-input-badge">
+            <Sparkles size={12} strokeWidth={2.2} />
+            Quiet Rebalance
+          </span>
+        </div>
 
         <form
           onSubmit={(e) => {
             e.preventDefault();
             handleDisrupt();
           }}
-          style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
+          style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
         >
-          <textarea
-            className="input changed-textarea"
-            placeholder="What changed?"
-            value={promptText}
-            onChange={(e) => setPromptText(e.target.value)}
-            disabled={loading}
-          />
+          <div className="changed-textarea-wrap">
+            <textarea
+              className="changed-textarea"
+              placeholder="e.g. My afternoon lab got cancelled, or I'm exhausted and need to stop early tonight…"
+              value={promptText}
+              onChange={(e) => setPromptText(e.target.value)}
+              disabled={loading}
+              rows={3}
+            />
+          </div>
 
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+          <div className="changed-input-actions">
             <button
               type="submit"
-              className="btn btn-primary"
+              className="changed-submit-btn"
               disabled={loading || !promptText.trim()}
             >
               {loading ? (
                 <>
-                  <Loader2 size={15} className="spin" strokeWidth={1.5} />
-                  <span>Rearranging your day…</span>
+                  <Loader2 size={16} className="spin" strokeWidth={2.2} />
+                  <span>Adapting schedule…</span>
                 </>
               ) : (
                 <>
-                  <span>Reorganise Plan</span>
-                  <ArrowRight size={15} strokeWidth={1.5} />
+                  <span>Reorganise plan</span>
+                  <ArrowRight size={16} strokeWidth={2.2} />
                 </>
               )}
             </button>
@@ -182,202 +288,216 @@ export function Changed() {
         </form>
       </div>
 
-      {/* Rearranging Loading State */}
-      {loading && (
-        <div className="changed-busy-banner">
-          <Loader2 size={24} className="spin" strokeWidth={1.5} style={{ color: 'var(--accent)' }} />
-          <div style={{ fontFamily: 'var(--font-display)', fontWeight: 'bold' }}>
-            Adapting your schedule quietly…
-          </div>
-          <div className="text-muted" style={{ fontSize: 'var(--text-xs)' }}>
-            Checking deadlines, buffer slots, and preserving your sleep window.
-          </div>
-        </div>
-      )}
+      {/* "Need a starting point?" with Four Light Pastel Suggestion Cards */}
+      <div className="changed-suggestions-section">
+        <h3 className="changed-suggestions-title">
+          <Compass size={18} strokeWidth={2.5} style={{ color: 'var(--pop-yellow)' }} />
+          <span>Need a starting point?</span>
+        </h3>
 
-      {/* Contextual Options for Broad Productivity Request */}
-      {choiceData && !proposal && (
-        <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
-          <div className="changed-result-header">
-            <div>
-              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
-                Choose Your Focus
+        <div className="changed-suggestions-grid">
+          {SUGGESTIONS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={`changed-suggestion-card ${item.colorClass}`}
+              onClick={() => handleSuggestionClick(item)}
+              disabled={loading}
+            >
+              <div className="changed-suggestion-icon-wrap">
+                {item.id === 'class-cancelled' && <Zap size={14} strokeWidth={2.5} />}
+                {item.id === 'feeling-exhausted' && <Clock size={14} strokeWidth={2.5} />}
+                {item.id === 'something-came-up' && <Sparkles size={14} strokeWidth={2.5} />}
+                {item.id === 'im-behind' && <RotateCcw size={14} strokeWidth={2.5} />}
+              </div>
+              <div className="changed-suggestion-label">{item.label}</div>
+              <div className="changed-suggestion-sub">{item.sub}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Inline Conversation & Flow Section */}
+      <div className="changed-chat-flow">
+        {/* User Message in Pink Bubble */}
+        {submittedPrompt && (
+          <div className="changed-user-bubble">
+            <div className="changed-user-bubble-label">You said</div>
+            <div>{submittedPrompt}</div>
+          </div>
+        )}
+
+        {/* Loading / Adapting State */}
+        {loading && (
+          <div className="changed-busy-banner">
+            <Loader2 size={28} className="spin" strokeWidth={2.5} style={{ color: '#111111' }} />
+            <div className="changed-busy-title">Adapting your schedule quietly…</div>
+            <div className="changed-busy-subtitle">
+              Checking deadlines, buffer slots, and preserving your sleep window.
+            </div>
+          </div>
+        )}
+
+        {/* Contextual Options / Choose Your Focus (Pale Lavender Orbit Card) */}
+        {choiceData && !proposal && (
+          <div className="changed-orbit-card">
+            <div className="changed-orbit-header">
+              <span className="changed-orbit-badge">
+                <Sparkles size={12} strokeWidth={2.2} />
+                Orbit Question
               </span>
-              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+              <h2 className="changed-orbit-question">
                 {choiceData.question || 'How would you like to use this newly available time?'}
               </h2>
             </div>
-          </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-            {(choiceData.options || []).map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                className="btn btn-secondary"
-                style={{
-                  textAlign: 'left',
-                  justifyContent: 'space-between',
-                  padding: 'var(--space-3)',
-                  width: '100%',
-                  display: 'flex',
-                  alignItems: 'center',
-                }}
-                onClick={() => handleSelectOption(opt)}
-                disabled={loading}
-              >
-                <div>
-                  <div style={{ fontWeight: 600 }}>{opt.label}</div>
-                  {opt.description && (
-                    <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '2px' }}>
-                      {opt.description}
-                    </div>
-                  )}
-                </div>
-                <ArrowRight size={14} strokeWidth={1.5} style={{ opacity: 0.6 }} />
-              </button>
-            ))}
+            <div className="changed-choice-list">
+              {(choiceData.options || []).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  className="changed-choice-btn"
+                  onClick={() => handleSelectOption(opt)}
+                  disabled={loading}
+                >
+                  <div>
+                    <div className="changed-choice-label">{opt.label}</div>
+                    {opt.description && (
+                      <div className="changed-choice-desc">{opt.description}</div>
+                    )}
+                  </div>
+                  <ArrowRight size={16} strokeWidth={2.2} style={{ flexShrink: 0, marginLeft: 8 }} />
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Clarification for Unknown Delays */}
-      {clarificationData && !proposal && (
-        <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
-          <div className="changed-result-header">
-            <div>
-              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
+        {/* Clarification for Delays (Pale Lavender Orbit Card) */}
+        {clarificationData && !proposal && (
+          <div className="changed-orbit-card">
+            <div className="changed-orbit-header">
+              <span className="changed-orbit-badge">
+                <HelpCircle size={12} strokeWidth={2.2} />
                 Clarification Needed
               </span>
-              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+              <h2 className="changed-orbit-question">
                 {clarificationData.question || 'How long do you expect to be delayed?'}
               </h2>
             </div>
-          </div>
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleSubmitClarification(clarifyAnswer);
-            }}
-            style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}
-          >
-            <input
-              type="text"
-              className="input"
-              placeholder="e.g. 1 hour, or until 5 PM"
-              value={clarifyAnswer}
-              onChange={(e) => setClarifyAnswer(e.target.value)}
-              disabled={loading}
-              style={{ flex: 1 }}
-              autoFocus
-            />
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={loading || !clarifyAnswer.trim()}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSubmitClarification(clarifyAnswer);
+              }}
+              className="changed-clarify-form"
             >
-              <span>Continue</span>
-              <ArrowRight size={14} strokeWidth={1.5} />
-            </button>
-          </form>
-        </div>
-      )}
-
-      {/* Disruption Results: Proposed Changes */}
-      {proposal && (
-        <div className="changed-result-card">
-          <div className="changed-result-header">
-            <div>
-              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
-                Proposed Plan
-              </span>
-              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
-                {proposal.summary || 'Here is what changed'}
-              </h2>
-            </div>
-            <span className="text-muted" style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }}>
-              Active schedule unchanged until approved
-            </span>
+              <input
+                type="text"
+                className="changed-clarify-input"
+                placeholder="e.g. 1 hour, or until 5 PM"
+                value={clarifyAnswer}
+                onChange={(e) => setClarifyAnswer(e.target.value)}
+                disabled={loading}
+                autoFocus
+              />
+              <button
+                type="submit"
+                className="changed-submit-btn"
+                disabled={loading || !clarifyAnswer.trim()}
+              >
+                <span>Continue</span>
+                <ArrowRight size={15} strokeWidth={2.2} />
+              </button>
+            </form>
           </div>
+        )}
 
-          {/* Plain language bullet points */}
-          <div className="changed-list">
-            {(proposal.what_changed || []).map((change, idx) => (
-              <div key={idx} className="changed-list-item">
-                <CheckCircle2 size={16} className="changed-list-icon" strokeWidth={1.5} />
-                <span>{change}</span>
+        {/* Schedule Proposal Card with Approve & Reject Actions */}
+        {proposal && (
+          <div className="changed-proposal-card" role="region" aria-label="Proposed Plan">
+            <div className="changed-proposal-header">
+              <div className="changed-proposal-headline-wrap">
+                <span className="changed-proposal-badge">
+                  <CheckCircle2 size={13} strokeWidth={2.5} />
+                  Proposed Plan
+                </span>
+                <h2 className="changed-proposal-title">
+                  {proposal.summary || 'Here is what changed'}
+                </h2>
               </div>
-            ))}
-          </div>
+              <span className="changed-proposal-safe-tag">
+                Active schedule unchanged until approved
+              </span>
+            </div>
 
-          {/* At risk / displaced / unscheduled alerts */}
-          {proposal.at_risk?.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-              {proposal.at_risk.map((item, idx) => (
-                <div
-                  key={item.id || idx}
-                  style={{
-                    backgroundColor: 'var(--surface-2)',
-                    border: '1px solid var(--line)',
-                    padding: 'var(--space-3)',
-                    borderRadius: 'var(--radius-sm)',
-                    fontSize: 'var(--text-xs)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-2)',
-                  }}
-                >
-                  <AlertTriangle size={14} strokeWidth={1.5} style={{ color: 'var(--accent)' }} />
-                  <span>
-                    <strong>{item.title}</strong>: {item.reason}
-                  </span>
+            {/* Plain language bullet points */}
+            <div className="changed-changes-list">
+              {(proposal.what_changed || []).map((change, idx) => (
+                <div key={idx} className="changed-changes-item">
+                  <CheckCircle2 size={16} className="changed-changes-icon" strokeWidth={2.5} />
+                  <span>{change}</span>
                 </div>
               ))}
             </div>
-          )}
 
-          {/* Actions: Discard or Approve */}
-          <div className="changed-actions-bar">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={handleReject}
-              disabled={loading || approving || discarding}
-            >
-              {discarding ? (
-                <>
-                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
-                  <span>Discarding…</span>
-                </>
-              ) : (
-                <>
-                  <Trash2 size={14} strokeWidth={1.5} />
-                  <span>Discard proposal</span>
-                </>
-              )}
-            </button>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleApprove}
-              disabled={loading || approving || discarding}
-            >
-              {approving ? (
-                <>
-                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
-                  <span>Approving…</span>
-                </>
-              ) : (
-                <>
-                  <ThumbsUp size={14} strokeWidth={1.5} />
-                  <span>Approve plan</span>
-                </>
-              )}
-            </button>
+            {/* At risk / displaced / unscheduled alerts */}
+            {proposal.at_risk?.length > 0 && (
+              <div className="changed-risk-list">
+                {proposal.at_risk.map((item, idx) => (
+                  <div key={item.id || idx} className="changed-risk-item">
+                    <AlertTriangle size={16} strokeWidth={2.5} className="changed-risk-icon" />
+                    <span>
+                      <strong>{item.title}</strong>: {item.reason}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Actions: Reject or Approve */}
+            <div className="changed-proposal-actions">
+              <button
+                type="button"
+                className="changed-btn-reject"
+                onClick={handleReject}
+                disabled={loading || approving || discarding}
+              >
+                {discarding ? (
+                  <>
+                    <Loader2 size={15} className="spin" strokeWidth={2.2} />
+                    <span>Discarding…</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 size={15} strokeWidth={2.2} />
+                    <span>Discard proposal</span>
+                  </>
+                )}
+              </button>
+              <button
+                type="button"
+                className="changed-btn-approve"
+                onClick={handleApprove}
+                disabled={loading || approving || discarding}
+              >
+                {approving ? (
+                  <>
+                    <Loader2 size={15} className="spin" strokeWidth={2.2} />
+                    <span>Approving…</span>
+                  </>
+                ) : (
+                  <>
+                    <ThumbsUp size={15} strokeWidth={2.2} />
+                    <span>Approve plan</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

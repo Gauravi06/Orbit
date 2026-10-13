@@ -1,112 +1,810 @@
+/* ==========================================================================
+   Orbit: Pop Neo-Brutalist Design for "Plans changed?" (Changed Page)
+   Palette:
+     Yellow:   #FFE066
+     Pink:     #FF90E8
+     Lime:     #B8F34A
+     Lavender: #B79CFF
+     Black:    #111111
+     White:    #FFFFFF
+   Headings:  'Archivo Black', sans-serif
+   Body:      'DM Sans', sans-serif
+   Outlines:  Thick black (2px - 3.5px solid #111111)
+   Shadows:   Hard offset (3px 3px 0 #111111 / 5px 5px 0 #111111 / 7px 7px 0 #111111)
+   Cards:     Chunky rounded (12px - 20px border radius)
+   Case:      Sentence case or Title Case (Never all-caps headings)
+   ========================================================================== */
+
 .changed-page {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: var(--space-8);
-  max-width: 820px;
+  gap: var(--space-6);
+  max-width: 860px;
+  width: 100%;
   margin: 0 auto;
+  box-sizing: border-box;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  color: var(--pop-black, #111111);
+  padding-bottom: var(--space-12);
 }
 
-.changed-header {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: var(--space-4);
+/* --------------------------------------------------------------------------
+   Doodles background around edges (Sparse, playful student-life motifs)
+   -------------------------------------------------------------------------- */
+.changed-doodles-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.changed-doodle {
+  position: absolute;
+  opacity: 0.85;
+}
+
+.changed-doodle-star-tr {
+  top: 12px;
+  right: -10px;
+  transform: rotate(15deg);
+}
+
+.changed-doodle-sparkle-l {
+  top: 280px;
+  left: -20px;
+  transform: rotate(-10deg);
+}
+
+.changed-doodle-swirl-r {
+  top: 420px;
+  right: -14px;
+  transform: rotate(25deg);
+}
+
+.changed-doodle-coffee-bl {
+  bottom: 40px;
+  left: -15px;
+  transform: rotate(-8deg);
+}
+
+@media (max-width: 768px) {
+  .changed-doodle {
+    display: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   1. Feature Header: "Plans changed?"
+   Black #111111 background with yellow #FFE066 accent shadow
+   Distinctive, spacious neo-brutalist header
+   -------------------------------------------------------------------------- */
+.changed-feature-header {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6);
+  background: #111111;
+  color: #FFFFFF;
+  border: 3.5px solid #111111;
+  border-radius: var(--pop-radius, 18px);
+  box-shadow: 6px 6px 0 #FFE066;
+  min-height: 120px;
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+@media (min-width: 720px) {
+  .changed-feature-header {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    padding: var(--space-8) var(--space-6);
+  }
+}
+
+.changed-header-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 620px;
+  z-index: 2;
+}
+
+.changed-header-top-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.changed-header-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: #FFE066;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-pill, 999px);
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  font-size: 12px;
+  font-weight: 800;
+  color: #111111;
+  box-shadow: 2px 2px 0 #111111;
 }
 
 .changed-title {
-  font-family: var(--font-display);
-  font-size: var(--text-xl);
-  font-weight: var(--font-bold);
-  color: var(--ink);
-  margin-bottom: var(--space-1);
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: clamp(1.85rem, 4vw, 2.4rem);
+  font-weight: 900;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: #FFFFFF;
 }
 
 .changed-subtitle {
-  font-size: var(--text-sm);
-  color: var(--ink-muted);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: #D6D6D6;
+  margin: 0;
 }
 
-/* Prompt Card */
-.changed-card {
-  background-color: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+/* --------------------------------------------------------------------------
+   2. Main Input Card
+   Prominent yellow card with white text area and contrasting black button
+   -------------------------------------------------------------------------- */
+.changed-input-card {
+  position: relative;
+  background: var(--pop-yellow, #FFE066);
+  border: var(--pop-border-thick, 3.5px solid #111111);
+  border-radius: var(--pop-radius, 18px);
+  box-shadow: var(--pop-shadow-lg, 7px 7px 0 #111111);
   padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  z-index: 1;
+  box-sizing: border-box;
 }
 
-.changed-card-title {
-  font-family: var(--font-display);
-  font-size: var(--text-md);
-  font-weight: var(--font-bold);
-  color: var(--ink);
+.changed-input-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.changed-input-title {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #111111;
+  margin: 0;
+}
+
+.changed-input-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: #FFFFFF;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-pill, 999px);
+  font-size: 12px;
+  font-weight: 800;
+  color: #111111;
+  box-shadow: 2px 2px 0 #111111;
+}
+
+.changed-textarea-wrap {
+  width: 100%;
 }
 
 .changed-textarea {
+  width: 100%;
+  box-sizing: border-box;
   min-height: 120px;
   resize: vertical;
-  font-family: var(--font-sans);
-  font-size: var(--text-base);
+  background: #FFFFFF;
+  color: #111111;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: var(--pop-shadow-sm, 3px 3px 0 #111111);
+  padding: 14px 16px;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.5;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-/* Reorganizing state */
-.changed-busy-banner {
-  padding: var(--space-8);
-  text-align: center;
-  background-color: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+.changed-textarea:focus {
+  outline: none;
+  box-shadow: 5px 5px 0 #111111;
+  transform: translate(-1px, -1px);
+}
+
+.changed-textarea::placeholder {
+  color: #717171;
+  font-weight: 400;
+}
+
+.changed-input-actions {
   display: flex;
-  flex-direction: column;
+  justify-content: flex-end;
   align-items: center;
   gap: var(--space-3);
 }
 
-/* Result Presentation (What Changed) */
-.changed-result-card {
-  background-color: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
+.changed-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: #111111;
+  color: #FFFFFF;
+  border: 3px solid #111111;
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: 4px 4px 0 #FFFFFF, 4px 4px 0 2px #111111;
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.changed-submit-btn:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: 6px 6px 0 #FFFFFF, 6px 6px 0 2px #111111;
+}
+
+.changed-submit-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 #FFFFFF, 2px 2px 0 2px #111111;
+}
+
+.changed-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* --------------------------------------------------------------------------
+   3. Suggestions Section: "Need a starting point?"
+   Four pastel suggestion cards in a clean responsive grid
+   -------------------------------------------------------------------------- */
+.changed-suggestions-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  z-index: 1;
+}
+
+.changed-suggestions-title {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 1.15rem;
+  font-weight: 900;
+  color: #FFFFFF;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.changed-suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (min-width: 680px) {
+  .changed-suggestions-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.changed-suggestion-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  gap: 6px;
+  padding: 14px 14px;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 12px);
+  box-shadow: var(--pop-shadow-sm, 3px 3px 0 #111111);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  color: #111111;
+}
+
+.changed-suggestion-card:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+}
+
+.changed-suggestion-card:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #111111;
+}
+
+.changed-suggestion-card:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* Four pastel card variants */
+.changed-suggestion-card.card-pink {
+  background: #FFE2FA; /* light pastel pink */
+}
+
+.changed-suggestion-card.card-lavender {
+  background: #E8DFFF; /* light pastel lavender */
+}
+
+.changed-suggestion-card.card-lime {
+  background: #E9FCD1; /* light pastel lime */
+}
+
+.changed-suggestion-card.card-yellow {
+  background: #FFF5CC; /* light pastel yellow */
+}
+
+.changed-suggestion-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 2px solid #111111;
+  background: #FFFFFF;
+  margin-bottom: 2px;
+}
+
+.changed-suggestion-label {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1.25;
+  color: #111111;
+}
+
+.changed-suggestion-sub {
+  font-size: 11px;
+  font-weight: 600;
+  color: #555555;
+  line-height: 1.3;
+}
+
+/* --------------------------------------------------------------------------
+   4. Chat Flow (Pink User Bubble & Pale Lavender Orbit Card)
+   -------------------------------------------------------------------------- */
+.changed-chat-flow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  z-index: 1;
+}
+
+/* User Message in Pink Bubble */
+.changed-user-bubble {
+  align-self: flex-end;
+  max-width: 85%;
+  background: var(--pop-pink, #FF90E8);
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius, 18px) var(--pop-radius, 18px) 4px var(--pop-radius, 18px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+  padding: 14px 18px;
+  color: #111111;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+  box-sizing: border-box;
+}
+
+.changed-user-bubble-label {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+/* Busy / Reorganizing State */
+.changed-busy-banner {
+  background: #E8DFFF;
+  border: var(--pop-border-thick, 3.5px solid #111111);
+  border-radius: var(--pop-radius, 18px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+  padding: var(--space-6);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  z-index: 1;
+}
+
+.changed-busy-title {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 1.15rem;
+  font-weight: 900;
+  color: #111111;
+}
+
+.changed-busy-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4B4B4B;
+  max-width: 440px;
+}
+
+/* Orbit Pale Lavender Response Card (Options / Clarifications) */
+.changed-orbit-card {
+  background: #F1EBFF; /* pale lavender */
+  border: var(--pop-border-thick, 3.5px solid #111111);
+  border-radius: var(--pop-radius, 18px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  z-index: 1;
+  box-sizing: border-box;
+}
+
+.changed-orbit-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 2px dashed #111111;
+  padding-bottom: var(--space-3);
+}
+
+.changed-orbit-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 10px;
+  background: var(--pop-lavender, #B79CFF);
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-pill, 999px);
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 11px;
+  color: #111111;
+  box-shadow: 2px 2px 0 #111111;
+}
+
+.changed-orbit-question {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 1.25rem;
+  font-weight: 900;
+  color: #111111;
+  margin: 0;
+  line-height: 1.3;
+}
+
+.changed-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.changed-choice-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  padding: 14px 18px;
+  background: #FFFFFF;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 12px);
+  box-shadow: var(--pop-shadow-sm, 3px 3px 0 #111111);
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  box-sizing: border-box;
+}
+
+.changed-choice-btn:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+  background: #FFFDF0;
+}
+
+.changed-choice-btn:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #111111;
+}
+
+.changed-choice-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.changed-choice-label {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 14px;
+  font-weight: 900;
+  color: #111111;
+}
+
+.changed-choice-desc {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555555;
+  margin-top: 3px;
+}
+
+/* Clarification form input */
+.changed-clarify-form {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 580px) {
+  .changed-clarify-form {
+    flex-direction: column;
+  }
+}
+
+.changed-clarify-input {
+  flex: 1;
+  background: #FFFFFF;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: var(--pop-shadow-sm, 3px 3px 0 #111111);
+  padding: 12px 14px;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  font-size: 14px;
+  font-weight: 600;
+  color: #111111;
+}
+
+.changed-clarify-input:focus {
+  outline: none;
+  box-shadow: 4px 4px 0 #111111;
+}
+
+/* --------------------------------------------------------------------------
+   5. Schedule Proposal Card
+   Distinct colourful card with clear Approve and Reject actions
+   -------------------------------------------------------------------------- */
+.changed-proposal-card {
+  position: relative;
+  background: #FFFFFF;
+  border: var(--pop-border-thick, 3.5px solid #111111);
+  border-radius: var(--pop-radius, 18px);
+  box-shadow: var(--pop-shadow-lg, 7px 7px 0 #111111);
   padding: var(--space-6);
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
+  z-index: 1;
+  box-sizing: border-box;
 }
 
-.changed-result-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: var(--space-3);
-}
-
-.changed-list {
+.changed-proposal-header {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: 8px;
+  border-bottom: 2.5px solid #111111;
+  padding-bottom: var(--space-4);
 }
 
-.changed-list-item {
+@media (min-width: 680px) {
+  .changed-proposal-header {
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+  }
+}
+
+.changed-proposal-headline-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.changed-proposal-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  padding: 4px 12px;
+  background: var(--pop-lime, #B8F34A);
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-pill, 999px);
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 12px;
+  font-weight: 900;
+  color: #111111;
+  box-shadow: 2px 2px 0 #111111;
+}
+
+.changed-proposal-title {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: clamp(1.2rem, 3vw, 1.45rem);
+  font-weight: 900;
+  line-height: 1.25;
+  color: #111111;
+  margin: 0;
+}
+
+.changed-proposal-safe-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: #FFF5CC;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-sm, 8px);
+  font-size: 12px;
+  font-weight: 700;
+  color: #111111;
+  align-self: flex-start;
+}
+
+/* Bullet list of what changed */
+.changed-changes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.changed-changes-item {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-3);
-  font-size: var(--text-sm);
-  line-height: var(--leading-normal);
-  color: var(--ink);
+  gap: 12px;
+  padding: 12px 14px;
+  background: #F9F9F9;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: 2px 2px 0 #111111;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #111111;
 }
 
-.changed-list-icon {
-  color: var(--accent);
+.changed-changes-icon {
+  color: #111111;
+  background: var(--pop-lime, #B8F34A);
+  padding: 2px;
+  border-radius: 6px;
+  border: 1.5px solid #111111;
   flex-shrink: 0;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
-.changed-actions-bar {
+/* At risk alerts */
+.changed-risk-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.changed-risk-item {
+  background: #FFF2F0;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: 2px 2px 0 #111111;
+  padding: 12px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #111111;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.changed-risk-icon {
+  color: #D9381E;
+  flex-shrink: 0;
+}
+
+/* Action Controls (Approve & Reject) */
+.changed-proposal-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--space-3);
-  border-top: 1px solid var(--line);
+  gap: 12px;
+  border-top: 2.5px solid #111111;
   padding-top: var(--space-4);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 540px) {
+  .changed-proposal-actions {
+    flex-direction: column-reverse;
+  }
+  .changed-proposal-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.changed-btn-reject {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 20px;
+  background: #FFFFFF;
+  color: #111111;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: var(--pop-shadow-sm, 3px 3px 0 #111111);
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 13px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.changed-btn-reject:hover:not(:disabled) {
+  background: #FFE2E0;
+  transform: translate(-2px, -2px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+}
+
+.changed-btn-reject:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 #111111;
+}
+
+.changed-btn-reject:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.changed-btn-approve {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background: var(--pop-lime, #B8F34A);
+  color: #111111;
+  border: var(--pop-border, 3px solid #111111);
+  border-radius: var(--pop-radius-sm, 10px);
+  box-shadow: var(--pop-shadow, 5px 5px 0 #111111);
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 14px;
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.changed-btn-approve:hover:not(:disabled) {
+  transform: translate(-2px, -2px);
+  box-shadow: var(--pop-shadow-lg, 7px 7px 0 #111111);
+}
+
+.changed-btn-approve:active:not(:disabled) {
+  transform: translate(2px, 2px);
+  box-shadow: 2px 2px 0 #111111;
+}
+
+.changed-btn-approve:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
 }
