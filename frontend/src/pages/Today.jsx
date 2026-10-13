@@ -48,14 +48,14 @@ import {
 import { findCurrentOrNextBlockIndex, getBlockTimeStatus } from './todayTimeSelection';
 import './Today.css';
 
+import { formatTime12 } from '../utils/timeFormat';
+
 /* Helper functions for dates & times */
 const pad = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 
 function formatTime(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return formatTime12(isoStr);
 }
 
 function calcMinutes(startIso, endIso) {

@@ -21,6 +21,7 @@ import {
 import { saveOnboarding, generateSchedule } from '../api/client';
 import { useTheme } from '../theme/useTheme';
 import ThemeToggle from '../components/ThemeToggle';
+import { formatTime12 } from '../utils/timeFormat';
 import './Onboarding.css';
 
 const TOTAL_STEPS = 12;
@@ -354,17 +355,38 @@ export function Onboarding() {
 
   return (
     <div className="onboarding-page">
+      {/* Hand-drawn student-life doodles around edges */}
+      <div className="onboarding-doodles-layer" aria-hidden="true">
+        <svg className="onboarding-doodle onboarding-doodle-star-tr" width="52" height="52" viewBox="0 0 52 52" fill="none">
+          <path
+            d="M26 3L31 17L46 19L35 30L39 45L26 37L13 45L17 30L6 19L21 17L26 3Z"
+            fill="#B8F34A"
+            stroke="#111111"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <svg className="onboarding-doodle onboarding-doodle-sparkle-bl" width="46" height="46" viewBox="0 0 46 46" fill="none">
+          <path
+            d="M23 4V42M4 23H42M9 9L37 37M9 37L37 9"
+            stroke="#BAE6FD"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
+
       <header className="onboarding-header">
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 'var(--space-2)' }}>
-          <span style={{ fontSize: 'var(--text-md)', color: 'var(--accent)' }}>◐</span>
-          <span style={{ fontFamily: 'var(--font-display)', fontWeight: 'bold' }}>Orbit</span>
+        <div className="onboarding-brand">
+          <span className="onboarding-brand-symbol">◐</span>
+          <span>Build your Orbit account</span>
         </div>
         <ThemeToggle showLabel={false} />
       </header>
 
       <div className="onboarding-container">
         {/* Progress Tracker */}
-        <div>
+        <div className="onboarding-progress-wrap">
           <div className="onboarding-progress-track">
             <div className="onboarding-progress-bar" style={{ width: `${(step / TOTAL_STEPS) * 100}%` }} />
           </div>
@@ -372,8 +394,7 @@ export function Onboarding() {
             <span>STEP {step} OF {TOTAL_STEPS}</span>
             <button
               type="button"
-              className="btn btn-ghost"
-              style={{ padding: '0', fontSize: 'var(--text-xs)', height: 'auto' }}
+              className="onboarding-skip-btn"
               onClick={handleFinish}
             >
               Skip setup
@@ -399,9 +420,13 @@ export function Onboarding() {
                     id="wake-time"
                     type="time"
                     className="input"
-                    value={profile.wake_time}
+                    value={profile.wake_time === 'no_pref' ? '' : profile.wake_time}
+                    disabled={profile.wake_time === 'no_pref'}
                     onChange={(e) => setProfile({ ...profile, wake_time: e.target.value })}
                   />
+                  <div style={{ fontSize: '11px', color: '#4B5563', marginTop: '2px' }}>
+                    {profile.wake_time === 'no_pref' ? 'Orbit default: 07:00 AM' : formatTime12(profile.wake_time)}
+                  </div>
                 </div>
                 <div className="form-group">
                   <label htmlFor="sleep-time">What time do you usually go to sleep?</label>
@@ -409,11 +434,40 @@ export function Onboarding() {
                     id="sleep-time"
                     type="time"
                     className="input"
-                    value={profile.sleep_time}
+                    value={profile.sleep_time === 'no_pref' ? '' : profile.sleep_time}
+                    disabled={profile.sleep_time === 'no_pref'}
                     onChange={(e) => setProfile({ ...profile, sleep_time: e.target.value })}
                   />
+                  <div style={{ fontSize: '11px', color: '#4B5563', marginTop: '2px' }}>
+                    {profile.sleep_time === 'no_pref' ? 'Orbit default: 11:30 PM' : formatTime12(profile.sleep_time)}
+                  </div>
                 </div>
               </div>
+
+              {/* Genuine No Preference Option for Wake & Sleep */}
+              <button
+                type="button"
+                className={`onboarding-option-btn ${profile.wake_time === 'no_pref' && profile.sleep_time === 'no_pref' ? 'selected' : ''}`}
+                onClick={() => {
+                  if (profile.wake_time === 'no_pref') {
+                    setProfile({ ...profile, wake_time: '07:00', sleep_time: '23:30' });
+                  } else {
+                    setProfile({ ...profile, wake_time: 'no_pref', sleep_time: 'no_pref' });
+                  }
+                }}
+              >
+                <div className="onboarding-radio-dot">
+                  {profile.wake_time === 'no_pref' && profile.sleep_time === 'no_pref' && (
+                    <div className="onboarding-radio-dot-inner" />
+                  )}
+                </div>
+                <div>
+                  <div className="onboarding-option-title">No preference (Use standard healthy boundaries)</div>
+                  <div className="onboarding-option-desc">
+                    Let Orbit protect standard 7:00 AM wake and 11:30 PM sleep boundaries without locking fixed constraints.
+                  </div>
+                </div>
+              </button>
 
               <div className="form-group">
                 <label htmlFor="routine-notes">Any quirks about your daily rhythm? (optional)</label>
@@ -450,6 +504,11 @@ export function Onboarding() {
                     value: 'different_weekdays',
                     title: 'Every weekday is different',
                     desc: 'Your schedule varies day by day (e.g. rotations on Tuesday, lab on Thursday, work on Friday).',
+                  },
+                  {
+                    value: 'no_pref',
+                    title: 'No preference',
+                    desc: 'Use Orbit default flexible weekday structure.',
                   },
                 ].map((opt) => (
                   <button
@@ -523,7 +582,7 @@ export function Onboarding() {
                       <div>
                         <div className="item-entry-title">{c.name}</div>
                         <div className="item-entry-sub">
-                          {c.start_time} – {c.end_time} • {c.days}
+                          {formatTime12(c.start_time)} – {formatTime12(c.end_time)} • {c.days}
                         </div>
                       </div>
                       <button
@@ -600,7 +659,7 @@ export function Onboarding() {
                           {c.name} ({c.days})
                         </span>
                         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--ink-muted)' }}>
-                          {c.start_time} – {c.end_time}
+                          {formatTime12(c.start_time)} – {formatTime12(c.end_time)}
                         </span>
                       </div>
 
@@ -1120,6 +1179,7 @@ export function Onboarding() {
                     { value: 'jumping', title: 'I start jumping between things' },
                     { value: 'lose_track', title: 'I lose track of priorities' },
                     { value: 'need_recovery', title: 'I need more recovery time' },
+                    { value: 'no_pref', title: 'No preference / It varies' },
                   ].map((opt) => (
                     <button
                       key={opt.value}
@@ -1145,6 +1205,7 @@ export function Onboarding() {
                     { value: 'large', title: 'Only when a task is large (>90 mins)' },
                     { value: 'self', title: "I'll decide myself" },
                     { value: 'no', title: 'No, keep tasks together' },
+                    { value: 'no_pref', title: 'No preference (Orbit default)' },
                   ].map((opt) => (
                     <button
                       key={opt.value}
@@ -1170,6 +1231,7 @@ export function Onboarding() {
                     { value: 'flexible', title: 'Mostly flexible', desc: 'Catch-up and protected personal time.' },
                     { value: 'recovery', title: 'Prioritize recovery and personal time', desc: 'No heavy deadlines; full rest & hobby protection.' },
                     { value: 'weekdays', title: 'Similar structure to weekdays', desc: 'Consistent routine all 7 days.' },
+                    { value: 'no_pref', title: 'No preference', desc: 'Use Orbit default flexible weekend pacing.' },
                   ].map((opt) => (
                     <button
                       key={opt.value}
@@ -1204,9 +1266,9 @@ export function Onboarding() {
               {/* Dynamic Narrative Review */}
               <div className="narrative-box">
                 {(() => {
-                  const uniqueAnchors = Array.from(new Set(profile.fixed_commitments.map((c) => (c.name || c.title || '').trim()).filter(Boolean)));
-                  const focusLabel = profile.focus_style === 'depends' ? 'adaptive / flexible' : profile.focus_style || 'balanced';
-                  return `Orbit learned that your active rhythm is ${profile.wake_time} → ${profile.sleep_time} with ${
+                  const wakeLabel = profile.wake_time === 'no_pref' ? 'Flexible (Default 7:00 AM)' : formatTime12(profile.wake_time);
+                  const sleepLabel = profile.sleep_time === 'no_pref' ? 'Flexible (Default 11:30 PM)' : formatTime12(profile.sleep_time);
+                  return `Orbit learned that your active rhythm is ${wakeLabel} → ${sleepLabel} with ${
                     profile.week_structure === 'same_weekdays' ? 'consistent weekday commitments' : 'day-by-day varying commitments'
                   }. You have ${profile.fixed_commitments.length} protected anchor block${
                     profile.fixed_commitments.length === 1 ? '' : 's'
@@ -1230,7 +1292,9 @@ export function Onboarding() {
               <div className="onboarding-summary-grid">
                 <div className="onboarding-summary-item">
                   <div className="onboarding-summary-label">Routine & Boundaries</div>
-                  <div className="onboarding-summary-val">{profile.wake_time} – {profile.sleep_time}</div>
+                  <div className="onboarding-summary-val">
+                    {profile.wake_time === 'no_pref' ? '7:00 AM (Default)' : formatTime12(profile.wake_time)} – {profile.sleep_time === 'no_pref' ? '11:30 PM (Default)' : formatTime12(profile.sleep_time)}
+                  </div>
                 </div>
                 <div className="onboarding-summary-item">
                   <div className="onboarding-summary-label">Fixed Anchors</div>
@@ -1332,27 +1396,27 @@ export function Onboarding() {
             </>
           )}
 
-          {/* Footer buttons */}
-          <div className="onboarding-footer">
+          {/* Step Navigation Footer Controls */}
+          <div className="onboarding-nav-footer">
             {step > 1 ? (
-              <button type="button" className="btn btn-secondary" onClick={prevStep}>
-                <ArrowLeft size={15} strokeWidth={1.5} />
+              <button type="button" className="onboarding-btn-back" onClick={prevStep}>
+                <ArrowLeft size={16} strokeWidth={2.2} />
                 <span>Back</span>
               </button>
             ) : (
               <div />
             )}
 
-            <button type="button" className="btn btn-primary" onClick={nextStep} disabled={loading}>
+            <button type="button" className="onboarding-btn-continue" onClick={nextStep} disabled={loading}>
               {loading ? (
                 <>
-                  <Loader2 size={16} className="spin" strokeWidth={1.5} />
+                  <Loader2 size={16} className="spin" strokeWidth={2.2} />
                   <span>Saving Profile…</span>
                 </>
               ) : (
                 <>
                   <span>{step === TOTAL_STEPS ? 'Complete Setup & Enter Planner' : 'Continue'}</span>
-                  <ArrowRight size={15} strokeWidth={1.5} />
+                  <ArrowRight size={16} strokeWidth={2.2} />
                 </>
               )}
             </button>

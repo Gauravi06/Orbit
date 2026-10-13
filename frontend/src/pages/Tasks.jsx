@@ -22,6 +22,7 @@ import {
   errText,
   parseTaskSemantics,
 } from '../api/client';
+import { formatTime12 } from '../utils/timeFormat';
 import './Tasks.css';
 
 export function Tasks() {
@@ -559,7 +560,7 @@ export function Tasks() {
                           weekday: 'short',
                           month: 'short',
                           day: 'numeric',
-                        })}
+                        })}{t.deadline.includes('T') ? ` at ${formatTime12(t.deadline)}` : ''}
                       </span>
                     </div>
 

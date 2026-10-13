@@ -25,13 +25,13 @@ import {
 import { getWeekSpread, setItemDone, errText } from '../api/client';
 import './Week.css';
 
+import { formatTime12 } from '../utils/timeFormat';
+
 /* Helper functions for formatting times & durations */
 const pad = (n) => String(n).padStart(2, '0');
 
 function formatTime(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return formatTime12(isoStr);
 }
 
 function calcMinutes(startIso, endIso) {

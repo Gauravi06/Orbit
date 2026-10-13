@@ -98,6 +98,27 @@ export function Login() {
 
   return (
     <div className="auth-page">
+      {/* Decorative sparse doodles around edges */}
+      <div className="auth-doodles-layer" aria-hidden="true">
+        <svg className="auth-doodle auth-doodle-star-tr" width="50" height="50" viewBox="0 0 50 50" fill="none">
+          <path
+            d="M25 3L30 17L44 19L33 29L37 44L25 36L13 44L17 29L6 19L20 17L25 3Z"
+            fill="#FF6B6B"
+            stroke="#111111"
+            strokeWidth="2.5"
+            strokeLinejoin="round"
+          />
+        </svg>
+        <svg className="auth-doodle auth-doodle-sparkle-bl" width="44" height="44" viewBox="0 0 44 44" fill="none">
+          <path
+            d="M22 4V40M4 22H40M9 9L35 35M9 35L35 9"
+            stroke="#99F6E4"
+            strokeWidth="3"
+            strokeLinecap="round"
+          />
+        </svg>
+      </div>
+
       <header className="auth-header">
         <div className="auth-brand">
           <span className="auth-brand-symbol">◐</span>
@@ -188,19 +209,18 @@ export function Login() {
 
             <button
               type="submit"
-              className="btn btn-primary"
+              className="auth-submit-btn"
               disabled={loading}
-              style={{ marginTop: 'var(--space-2)', width: '100%' }}
             >
               {loading ? (
                 <>
-                  <Loader2 size={16} className="spin" strokeWidth={1.5} />
+                  <Loader2 size={16} className="spin" strokeWidth={2.2} />
                   <span>{isSignup ? 'Creating account…' : 'Logging in…'}</span>
                 </>
               ) : (
                 <>
                   <span>{isSignup ? 'Create Account' : 'Log In'}</span>
-                  <ArrowRight size={16} strokeWidth={1.5} />
+                  <ArrowRight size={16} strokeWidth={2.2} />
                 </>
               )}
             </button>

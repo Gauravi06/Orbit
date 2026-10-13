@@ -360,8 +360,8 @@ function buildScheduleItems(dateObj, version, overridePrefs) {
   const date = ymd(dateObj);
   const prefs = overridePrefs || preferences || DEFAULT_PREFERENCES;
 
-  const wakeStr = prefs.wake_time || '07:00';
-  const sleepStr = prefs.sleep_time || '23:30';
+  const wakeStr = prefs.wake_time && prefs.wake_time !== 'no_pref' ? prefs.wake_time : '07:00';
+  const sleepStr = prefs.sleep_time && prefs.sleep_time !== 'no_pref' ? prefs.sleep_time : '23:30';
   const wakeMins = parseTimeToMins(wakeStr);
   let sleepMins = parseTimeToMins(sleepStr);
   if (sleepMins <= wakeMins) {
@@ -1361,8 +1361,9 @@ function calcMins(startIso, endIso) {
 }
 
 function parseTimeToMins(timeStr) {
-  if (!timeStr) return 0;
+  if (!timeStr || timeStr === 'no_pref') return 0;
   const [h, m] = timeStr.split(':').map(Number);
+  if (isNaN(h)) return 0;
   return h * 60 + (m || 0);
 }
 
