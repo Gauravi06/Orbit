@@ -29,7 +29,7 @@ Orbit/
 
 ### Database
 All 8 tables created and migrated via Alembic (alembic upgrade head run successfully):
-users, refresh_tokens, tasks, schedules, schedule_items, feedback, preferences, gemini_cache
+users, refresh_tokens, schedules, schedule_items, feedback, preferences, gemini_cache
 
 Two tables added beyond original spec, both deliberate decisions:
 - refresh_tokens - supports access+refresh JWT auth (hashed, revocable, rotated)
