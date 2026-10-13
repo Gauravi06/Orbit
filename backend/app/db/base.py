@@ -7,3 +7,4 @@ from app.models.schedule_item import ScheduleItem
 from app.models.feedback import Feedback
 from app.models.preference import Preference
 from app.models.gemini_cache import GeminiCache
+from app.models.schedule_proposal import ScheduleProposal

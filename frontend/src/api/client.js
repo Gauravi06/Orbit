@@ -219,7 +219,44 @@ export async function disrupt(text, date) {
   return data;
 }
 
-/* ---------- Feedback ---------- */
+/* ---------- Proposals ---------- */
+
+export async function proposeSchedule(date) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.proposeSchedule(date);
+  }
+  const { data } = await http.post('/schedules/propose', date ? { date } : {});
+  return data;
+}
+
+export async function proposeDisruption(text, date, selectedOption) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.proposeDisruption(text, date, selectedOption);
+  }
+  const { data } = await http.post('/schedules/propose', { text, date, selected_option: selectedOption });
+  return data;
+}
+
+export async function approveProposal(proposalId) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.approveProposal(proposalId);
+  }
+  const { data } = await http.post(`/schedules/proposals/${proposalId}/approve`);
+  return data;
+}
+
+export async function rejectProposal(proposalId) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.rejectProposal(proposalId);
+  }
+  const { data } = await http.post(`/schedules/proposals/${proposalId}/reject`);
+  return data;
+}
+
 
 export async function sendFeedback(text) {
   if (USE_MOCK) {

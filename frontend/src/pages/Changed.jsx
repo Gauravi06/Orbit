@@ -6,29 +6,50 @@ import {
   AlertTriangle,
   RotateCcw,
   Loader2,
+  ThumbsUp,
+  Trash2,
 } from 'lucide-react';
-import { disrupt, generateSchedule, errText } from '../api/client';
+import {
+  proposeDisruption,
+  approveProposal,
+  rejectProposal,
+  errText,
+} from '../api/client';
 import './Changed.css';
 
 export function Changed() {
   const [promptText, setPromptText] = useState('');
   const [loading, setLoading] = useState(false);
+  const [approving, setApproving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
   const [error, setError] = useState('');
-  const [result, setResult] = useState(null);
+  const [proposal, setProposal] = useState(null);
+  const [choiceData, setChoiceData] = useState(null);
+  const [clarificationData, setClarificationData] = useState(null);
+  const [clarifyAnswer, setClarifyAnswer] = useState('');
 
   const navigate = useNavigate();
 
   const handleDisrupt = async (textToSubmit) => {
+    if (loading || approving || discarding) return;
     const text = textToSubmit || promptText;
     if (!text.trim()) return;
 
     setLoading(true);
     setError('');
-    setResult(null);
+    setProposal(null);
+    setChoiceData(null);
+    setClarificationData(null);
 
     try {
-      const data = await disrupt(text);
-      setResult(data);
+      const data = await proposeDisruption(text);
+      if (data.needs_choice) {
+        setChoiceData(data);
+      } else if (data.needs_clarification) {
+        setClarificationData(data);
+      } else {
+        setProposal(data);
+      }
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -36,16 +57,70 @@ export function Changed() {
     }
   };
 
-  const handleUndo = async () => {
+  const handleSelectOption = async (option) => {
+    if (loading || approving || discarding) return;
     setLoading(true);
+    setError('');
     try {
-      await generateSchedule();
-      setResult(null);
-      setPromptText('');
+      const data = await proposeDisruption(promptText, null, option);
+      setProposal(data);
+      setChoiceData(null);
     } catch (err) {
       setError(errText(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSubmitClarification = async (answer) => {
+    if (loading || approving || discarding) return;
+    setLoading(true);
+    setError('');
+    try {
+      const combined = `${promptText} (duration: ${answer})`.trim();
+      const data = await proposeDisruption(combined);
+      if (data.needs_choice) {
+        setChoiceData(data);
+        setClarificationData(null);
+      } else {
+        setProposal(data);
+        setClarificationData(null);
+      }
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleApprove = async () => {
+    if (!proposal || approving || discarding || loading) return;
+    setApproving(true);
+    setError('');
+    try {
+      await approveProposal(proposal.proposal_id);
+      navigate('/today');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!proposal || approving || discarding || loading) return;
+    setDiscarding(true);
+    setError('');
+    try {
+      await rejectProposal(proposal.proposal_id);
+      setProposal(null);
+      setChoiceData(null);
+      setClarificationData(null);
+      setPromptText('');
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setDiscarding(false);
     }
   };
 
@@ -120,26 +195,115 @@ export function Changed() {
         </div>
       )}
 
-      {/* Disruption Results: What Changed */}
-      {result && (
+      {/* Contextual Options for Broad Productivity Request */}
+      {choiceData && !proposal && (
+        <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
+          <div className="changed-result-header">
+            <div>
+              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
+                Choose Your Focus
+              </span>
+              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+                {choiceData.question || 'How would you like to use this newly available time?'}
+              </h2>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+            {(choiceData.options || []).map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                className="btn btn-secondary"
+                style={{
+                  textAlign: 'left',
+                  justifyContent: 'space-between',
+                  padding: 'var(--space-3)',
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                }}
+                onClick={() => handleSelectOption(opt)}
+                disabled={loading}
+              >
+                <div>
+                  <div style={{ fontWeight: 600 }}>{opt.label}</div>
+                  {opt.description && (
+                    <div className="text-muted" style={{ fontSize: 'var(--text-xs)', marginTop: '2px' }}>
+                      {opt.description}
+                    </div>
+                  )}
+                </div>
+                <ArrowRight size={14} strokeWidth={1.5} style={{ opacity: 0.6 }} />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Clarification for Unknown Delays */}
+      {clarificationData && !proposal && (
+        <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
+          <div className="changed-result-header">
+            <div>
+              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
+                Clarification Needed
+              </span>
+              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+                {clarificationData.question || 'How long do you expect to be delayed?'}
+              </h2>
+            </div>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSubmitClarification(clarifyAnswer);
+            }}
+            style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}
+          >
+            <input
+              type="text"
+              className="input"
+              placeholder="e.g. 1 hour, or until 5 PM"
+              value={clarifyAnswer}
+              onChange={(e) => setClarifyAnswer(e.target.value)}
+              disabled={loading}
+              style={{ flex: 1 }}
+              autoFocus
+            />
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={loading || !clarifyAnswer.trim()}
+            >
+              <span>Continue</span>
+              <ArrowRight size={14} strokeWidth={1.5} />
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Disruption Results: Proposed Changes */}
+      {proposal && (
         <div className="changed-result-card">
           <div className="changed-result-header">
             <div>
               <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
-                Version {result.schedule?.version || 2} Generated
+                Proposed Plan
               </span>
               <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
-                Here is what changed
+                {proposal.summary || 'Here is what changed'}
               </h2>
             </div>
             <span className="text-muted" style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }}>
-              Nothing failed · Work shifted
+              Active schedule unchanged until approved
             </span>
           </div>
 
           {/* Plain language bullet points */}
           <div className="changed-list">
-            {result.what_changed?.map((change, idx) => (
+            {(proposal.what_changed || []).map((change, idx) => (
               <div key={idx} className="changed-list-item">
                 <CheckCircle2 size={16} className="changed-list-icon" strokeWidth={1.5} />
                 <span>{change}</span>
@@ -147,12 +311,12 @@ export function Changed() {
             ))}
           </div>
 
-          {/* At risk alerts if any */}
-          {result.at_risk?.length > 0 && (
+          {/* At risk / displaced / unscheduled alerts */}
+          {proposal.at_risk?.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-              {result.at_risk.map((item) => (
+              {proposal.at_risk.map((item, idx) => (
                 <div
-                  key={item.id}
+                  key={item.id || idx}
                   style={{
                     backgroundColor: 'var(--surface-2)',
                     border: '1px solid var(--line)',
@@ -173,24 +337,43 @@ export function Changed() {
             </div>
           )}
 
-          {/* Actions: Keep or Undo */}
+          {/* Actions: Discard or Approve */}
           <div className="changed-actions-bar">
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={handleUndo}
-              disabled={loading}
+              onClick={handleReject}
+              disabled={loading || approving || discarding}
             >
-              <RotateCcw size={14} strokeWidth={1.5} />
-              <span>Undo / Restore Original</span>
+              {discarding ? (
+                <>
+                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                  <span>Discarding…</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 size={14} strokeWidth={1.5} />
+                  <span>Discard proposal</span>
+                </>
+              )}
             </button>
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => navigate('/today')}
+              onClick={handleApprove}
+              disabled={loading || approving || discarding}
             >
-              <span>Keep this plan</span>
-              <ArrowRight size={14} strokeWidth={1.5} />
+              {approving ? (
+                <>
+                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                  <span>Approving…</span>
+                </>
+              ) : (
+                <>
+                  <ThumbsUp size={14} strokeWidth={1.5} />
+                  <span>Approve plan</span>
+                </>
+              )}
             </button>
           </div>
         </div>

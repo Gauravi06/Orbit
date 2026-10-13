@@ -60,6 +60,7 @@ let tasks = [];
 let schedules = [];
 let onboarded = false;
 let notes = [];
+let proposals = {}; // proposal_id -> { id, status, snapshot, what_changed, at_risk, summary, created_at }
 
 const CURRENT_SCHEDULER_VERSION = '2026.10.balanced_v7_live';
 
@@ -908,12 +909,18 @@ const STORAGE_KEY_SCHEDULES = 'orbit_mock_schedules';
 const STORAGE_KEY_PREFS = 'orbit_mock_preferences';
 const STORAGE_KEY_ONBOARDED = 'orbit_mock_onboarded';
 const STORAGE_KEY_NOTES = 'orbit_mock_notes';
+const STORAGE_KEY_PROPOSALS = 'orbit_mock_proposals';
 
 export function loadStoredState() {
   let loadedTasks = null;
   let loadedSchedules = null;
   let loadedPrefs = null;
   let loadedOnboarded = null;
+
+  try {
+    const rawProposals = localStorage.getItem(STORAGE_KEY_PROPOSALS);
+    if (rawProposals) proposals = JSON.parse(rawProposals);
+  } catch { /* ignore */ }
 
   try {
     const rawPrefs = localStorage.getItem(STORAGE_KEY_PREFS);
@@ -1039,6 +1046,9 @@ function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY_NOTES, JSON.stringify(notes));
   } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_PROPOSALS, JSON.stringify(proposals));
+  } catch { /* ignore */ }
 }
 
 export function resetDemoState() {
@@ -1048,7 +1058,10 @@ export function resetDemoState() {
     localStorage.removeItem(STORAGE_KEY_PREFS);
     localStorage.removeItem(STORAGE_KEY_ONBOARDED);
     localStorage.removeItem(STORAGE_KEY_NOTES);
+    localStorage.removeItem(STORAGE_KEY_PROPOSALS);
   } catch { /* ignore */ }
+
+  proposals = {};
 
   tasks = JSON.parse(JSON.stringify(INITIAL_TASKS));
   schedules = buildSeedPastDays();
@@ -1245,7 +1258,7 @@ export async function deleteTask(taskId) {
 
 export async function getSchedule(date) {
   await delay();
-  const dateStr = typeof date === 'string' ? date : ymd(date);
+  const dateStr = typeof date === 'string' ? date : ymd(date || todayDate());
   let found = schedules.find((s) => s.date === dateStr);
   if (!found || found.scheduler_version !== CURRENT_SCHEDULER_VERSION) {
     const targetDate = new Date(dateStr + 'T00:00:00');
@@ -2087,6 +2100,868 @@ export async function disrupt(text, date) {
   };
 }
 
+/* =========================================================================
+   PROPOSALS: proposeSchedule, proposeDisruption, approveProposal, rejectProposal
+   ========================================================================= */
+
+/**
+ * Creates a proposal by building a fresh schedule snapshot without touching
+ * the active `schedules` array. Returns the proposal object.
+ */
+export async function proposeSchedule(date) {
+  await delay(150);
+  const todayObj = todayDate();
+  const proposalId = uid();
+  const snapshot = []; // array of day schedules forming the proposal
+
+  if (date) {
+    const dateStr = typeof date === 'string' ? date : ymd(date);
+    const targetDate = new Date(dateStr + 'T00:00:00');
+    const newSchedule = buildScheduleItems(targetDate, 1);
+    snapshot.push(JSON.parse(JSON.stringify(newSchedule)));
+  } else {
+    // Full week generation (same logic as generateSchedule but into snapshot)
+    const currentDayOfWeek = todayObj.getDay();
+    const monDiff = (currentDayOfWeek === 0 ? -6 : 1) - currentDayOfWeek;
+    const monday = addDays(todayObj, monDiff);
+
+    for (let i = 0; i < 7; i++) {
+      const targetDate = addDays(monday, i);
+      const daySched = buildScheduleItems(targetDate, 1);
+      snapshot.push(JSON.parse(JSON.stringify(daySched)));
+    }
+    // Also ensure today through today + 6
+    for (let i = 0; i < 7; i++) {
+      const targetDate = addDays(todayObj, i);
+      const dateStr = ymd(targetDate);
+      if (!snapshot.some((s) => s.date === dateStr)) {
+        snapshot.push(JSON.parse(JSON.stringify(buildScheduleItems(targetDate, 1))));
+      }
+    }
+  }
+
+  // Compute what_changed by comparing snapshot to active schedules
+  const what_changed = [];
+  for (const proposed of snapshot) {
+    const active = schedules.find((s) => s.date === proposed.date);
+    if (!active) {
+      what_changed.push(`New schedule created for ${proposed.date}.`);
+    } else {
+      const activeSet = new Set(active.items.map((i) => i.title));
+      const proposedSet = new Set(proposed.items.map((i) => i.title));
+      for (const title of proposedSet) {
+        if (!activeSet.has(title)) what_changed.push(`Added "${title}" on ${proposed.date}.`);
+      }
+      for (const title of activeSet) {
+        if (!proposedSet.has(title)) what_changed.push(`Removed "${title}" from ${proposed.date}.`);
+      }
+    }
+  }
+  if (what_changed.length === 0) {
+    what_changed.push('Fresh schedule generated with your current tasks and preferences.');
+  }
+
+  const proposal = {
+    proposal_id: proposalId,
+    status: 'pending',
+    summary: `Proposed plan with ${snapshot.reduce((n, s) => n + s.items.length, 0)} sessions across ${snapshot.length} days.`,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    snapshot,
+    what_changed,
+    at_risk: [],
+    violations: [],
+    // For the Today page: return the proposed day matching the requested date
+    days: snapshot,
+  };
+  proposals[proposalId] = proposal;
+  return proposal;
+}
+
+function formatMinsFriendly(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const period = h >= 12 ? 'PM' : 'AM';
+  const displayH = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${displayH}:00 ${period}` : `${displayH}:${pad(m)} ${period}`;
+}
+
+function formatTime24(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `${pad(h)}:${pad(m)}`;
+}
+
+function parseTimeFromText(textLower) {
+  const timeRegexes = [
+    /(?:delayed\s+until|stuck\s+until|busy\s+until|tied\s+up\s+until|until)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+    /(?:got\s+back(?:\s+home)?|back\s+home|got\s+home|arrived(?:\s+home)?|home)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+    /(?:free\s+(?:after|at|from)|available\s+(?:after|at|from)|after|from|by)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+    /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+  ];
+  for (const re of timeRegexes) {
+    const m = textLower.match(re);
+    if (m) {
+      let h = parseInt(m[1], 10);
+      const min = m[2] ? parseInt(m[2], 10) : 0;
+      const meridiem = m[3] ? m[3].toLowerCase() : null;
+      if (meridiem === 'pm' && h < 12) h += 12;
+      else if (meridiem === 'am' && h === 12) h = 0;
+      else if (!meridiem) {
+        if (h >= 1 && h <= 6) h += 12;
+      }
+      return h * 60 + min;
+    }
+  }
+  return null;
+}
+
+function parseDurationMinsFromText(textLower) {
+  const mHours = textLower.match(/(\d+(?:\.\d+)?)\s*(?:hours|hour|hrs|hr)\b/i);
+  const mMins = textLower.match(/(\d+)\s*(?:minutes|minute|mins|min)\b/i);
+  let total = 0;
+  if (mHours) total += Math.round(parseFloat(mHours[1]) * 60);
+  if (mMins) total += parseInt(mMins[1], 10);
+  return total > 0 ? total : null;
+}
+
+function parseDeadlineFromText(textLower, targetDateObj) {
+  // Checks e.g. "due in 2 days", "due in two days", "due tomorrow", "due friday"
+  const mTwoDays = textLower.match(/due\s+(?:in\s+)?(?:two|2)\s+days/i);
+  if (mTwoDays) {
+    const d = addDays(targetDateObj, 2);
+    return `${ymd(d)}T23:59:00`;
+  }
+  const mThreeDays = textLower.match(/due\s+(?:in\s+)?(?:three|3)\s+days/i);
+  if (mThreeDays) {
+    const d = addDays(targetDateObj, 3);
+    return `${ymd(d)}T23:59:00`;
+  }
+  const mTomorrow = textLower.match(/due\s+tomorrow/i);
+  if (mTomorrow) {
+    const d = addDays(targetDateObj, 1);
+    return `${ymd(d)}T23:59:00`;
+  }
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  for (let i = 0; i < 7; i++) {
+    const re = new RegExp(`due\\s+(?:on\\s+)?${dayNames[i]}`, 'i');
+    if (re.test(textLower)) {
+      const nowDay = targetDateObj.getDay();
+      let diff = i - nowDay;
+      if (diff <= 0) diff += 7;
+      const d = addDays(targetDateObj, diff);
+      return `${ymd(d)}T23:59:00`;
+    }
+  }
+  return null;
+}
+
+function validateScheduleInvariants(daySchedule, wakeMins, sleepMins) {
+  const violations = [];
+  const items = (daySchedule.items || []).filter((it) => it.status !== 'displaced');
+  items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  for (let i = 0; i < items.length; i++) {
+    const cur = items[i];
+    const sM = parseTimeToMins(cur.start_time.split('T')[1].slice(0, 5));
+    const eM = parseTimeToMins(cur.end_time.split('T')[1].slice(0, 5));
+
+    if (eM <= sM) {
+      violations.push(`Item "${cur.title}" has invalid duration (${sM} to ${eM}).`);
+    }
+    if (sM < wakeMins) {
+      violations.push(`Item "${cur.title}" starts before wake time (${formatTime24(wakeMins)}).`);
+    }
+    if (eM > sleepMins) {
+      violations.push(`Item "${cur.title}" ends after sleep time (${formatTime24(sleepMins)}).`);
+    }
+
+    if (i < items.length - 1) {
+      const next = items[i + 1];
+      const nextSM = parseTimeToMins(next.start_time.split('T')[1].slice(0, 5));
+      if (eM > nextSM) {
+        violations.push(`Overlap detected between "${cur.title}" and "${next.title}".`);
+      }
+    }
+  }
+  return violations;
+}
+
+/**
+ * Creates a schedule adaptation proposal without touching active schedules.
+ * Supports:
+ * - Cancelling commitments (full or partial early arrival shortening)
+ * - Shifting commutes and dependent buffers
+ * - Broad productivity requests with 2-3 contextual task options
+ * - Unknown delay clarifications
+ * - Deadline compliance & multi-session task splitting
+ * - Rest/recovery preservation
+ * - Invariant safety
+ */
+export async function proposeDisruption(text, date, selectedOption = null) {
+  await delay(150);
+
+  const textLower = (text || '').toLowerCase().trim();
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayAbbrs = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+  // 1. Resolve target date deterministically
+  let targetDateStr = null;
+  let targetDateObj = null;
+
+  for (let i = 0; i < 7; i++) {
+    const full = dayNames[i];
+    const abbr = dayAbbrs[i];
+    const re = new RegExp(`\\b(${full}|${abbr})\\b`, 'i');
+    if (re.test(textLower)) {
+      const existing = schedules.find((s) => {
+        const d = new Date(s.date + 'T00:00:00');
+        return d.getDay() === i;
+      });
+      if (existing) {
+        targetDateStr = existing.date;
+        targetDateObj = new Date(existing.date + 'T00:00:00');
+      } else {
+        const now = todayDate();
+        const currentDay = now.getDay();
+        const monDiff = (currentDay === 0 ? -6 : 1) - currentDay;
+        const monday = addDays(now, monDiff);
+        const targetOffset = i === 0 ? 6 : i - 1;
+        targetDateObj = addDays(monday, targetOffset);
+        targetDateStr = ymd(targetDateObj);
+      }
+      break;
+    }
+  }
+
+  if (!targetDateStr && /\b(tomorrow|tmrw)\b/i.test(textLower)) {
+    targetDateObj = addDays(todayDate(), 1);
+    targetDateStr = ymd(targetDateObj);
+  }
+
+  if (!targetDateStr) {
+    targetDateStr = date ? (typeof date === 'string' ? date : ymd(date)) : ymd(todayDate());
+    targetDateObj = new Date(targetDateStr + 'T00:00:00');
+  }
+
+  const targetDayOfWeek = targetDateObj.getDay();
+  const targetDayName = dayNames[targetDayOfWeek].charAt(0).toUpperCase() + dayNames[targetDayOfWeek].slice(1);
+
+  // 2. Baseline schedule: CLONE ONLY — never modify the active schedule!
+  const targetIdx = schedules.findIndex((s) => s.date === targetDateStr);
+  const baseline = targetIdx >= 0 ? schedules[targetIdx] : buildScheduleItems(targetDateObj, 1);
+  const updated = JSON.parse(JSON.stringify(baseline));
+  updated.version = (updated.version || 1) + 1;
+
+  const what_changed = [];
+  const at_risk = [];
+
+  const wakeMins = parseTimeToMins(preferences.wake_time || '07:00');
+  const sleepMins = parseTimeToMins(preferences.sleep_time || '23:30');
+  const latestWorkTime = sleepMins - 30; // 30 min wind-down buffer
+
+  // 3. Parse stated time & duration
+  const statedTimeMins = parseTimeFromText(textLower);
+  const statedDurMins = parseDurationMinsFromText(textLower);
+
+  // 4. Categorize Intents
+  const isCancelled = /\b(cancel|cancelled|canceled|canceling|cancelling|called off|calling off|no lecture|no lectures|no class|no classes|no rotation|no lab|no meeting)\b/i.test(textLower);
+  const isAllDayCancellation = /\b(all\s+(?:classes|lectures)|whole\s+day|day\s+off|no\s+(?:classes|lectures)\s+today)\b/i.test(textLower);
+  const isEarlyArrival = statedTimeMins !== null && /\b(got\s+back(?:\s+home)?|back\s+home|got\s+home|arrived|home|early)\b/i.test(textLower);
+  const isRest = /\b(exhaust|exhausted|tired|sick|need rest|need to rest|unwell|fever|headache|burnt out|burnout|drained|take a break|rest tonight|take it easy)\b/i.test(textLower);
+  const isDelayed = /\b(delayed|running late|stuck in traffic|stuck until|busy until|cant study until|cannot study until|tied up until|emergency until|held up)\b/i.test(textLower);
+  const isBroadProductive = /\b(feel like doing something productive|want to be productive|do something productive|have free time|got free time|any productive|look for something productive)\b/i.test(textLower);
+  const wantsProductive = isBroadProductive || /\b(productive|get ahead|catch up|study|work on|focus|do some work|finish|assignment|project|dsa|coding|practice|make progress)\b/i.test(textLower);
+
+  // 5. Match specific named task (if any)
+  const allKnownTasks = [];
+  const seenTaskTitles = new Set();
+  (tasks || []).forEach((t) => {
+    const tTitle = (t.title || t.name || '').trim();
+    if (tTitle && !seenTaskTitles.has(tTitle.toLowerCase())) {
+      seenTaskTitles.add(tTitle.toLowerCase());
+      allKnownTasks.push(t);
+    }
+  });
+  const prefTasks = [
+    ...(preferences.need_to_items || []),
+    ...(preferences.should_do_items || []),
+    ...(preferences.like_to_items || []),
+  ];
+  prefTasks.forEach((it) => {
+    const tTitle = typeof it === 'string' ? it.trim() : (it.title || it.name || '').trim();
+    if (tTitle && !seenTaskTitles.has(tTitle.toLowerCase())) {
+      seenTaskTitles.add(tTitle.toLowerCase());
+      allKnownTasks.push(typeof it === 'string' ? { id: uid(), title: tTitle, duration: 60, tier: 'need_to' } : it);
+    }
+  });
+
+  let matchedSpecificTask = null;
+  for (const t of allKnownTasks) {
+    const tTitle = (t.title || t.name || '').toLowerCase().trim();
+    if (tTitle && tTitle.length > 2 && textLower.includes(tTitle)) {
+      matchedSpecificTask = t;
+      break;
+    }
+  }
+
+  // -------------------------------------------------------------
+  // BRANCH 0: UNKNOWN DELAY CLARIFICATION
+  // -------------------------------------------------------------
+  if (isDelayed && statedTimeMins === null && statedDurMins === null && !selectedOption) {
+    return {
+      needs_clarification: true,
+      question: 'How long do you expect to be delayed or unavailable?',
+      prompt_text: text,
+      target_date: targetDateStr,
+    };
+  }
+
+  // -------------------------------------------------------------
+  // BRANCH 1: REST / RECOVERY REQUEST
+  // -------------------------------------------------------------
+  if (isRest && !wantsProductive) {
+    const nonFixedStudyItems = updated.items.filter(
+      (i) => !i.is_fixed && i.kind !== 'break' && i.kind !== 'decompression' && i.status !== 'displaced'
+    );
+    if (nonFixedStudyItems.length > 0) {
+      nonFixedStudyItems.forEach((item) => {
+        item.status = 'displaced';
+        item.displacement_reason = 'Displaced to allow rest and recovery tonight.';
+        what_changed.push(`Removed "${item.title}" from tonight to give you time to recover.`);
+      });
+      what_changed.push('Protected your evening wind-down and sleep schedule.');
+    } else {
+      what_changed.push('Confirmed no intense study blocks are scheduled for tonight. Focus on rest.');
+    }
+
+    const proposalId = uid();
+    const proposal = {
+      proposal_id: proposalId,
+      status: 'pending',
+      summary: `Rest and recovery prioritized for ${targetDayName}`,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      snapshot: [updated],
+      what_changed,
+      at_risk,
+      violations: validateScheduleInvariants(updated, wakeMins, sleepMins),
+      days: [updated],
+      schedule: updated,
+    };
+    proposals[proposalId] = proposal;
+    persistState();
+    return proposal;
+  }
+
+  // -------------------------------------------------------------
+  // RECONCILIATION: SHORTEN OR CANCEL COMMITMENTS & REPOSITION COMMUTES
+  // -------------------------------------------------------------
+  const isLectureMention = /\b(lecture|lectures|class|classes|college|coursework)\b/i.test(textLower);
+  const isRotationMention = /\b(rotation|clinic|hospital)\b/i.test(textLower);
+  const isLabMention = /\b(lab|laboratory)\b/i.test(textLower);
+  const isMeetingMention = /\b(meeting|discussion)\b/i.test(textLower);
+
+  const matchingCommitmentItem = updated.items.find((item) => {
+    if (item.kind !== 'fixed') return false;
+    const iTitle = (item.title || '').toLowerCase();
+    if (isLectureMention && (iTitle.includes('lecture') || iTitle.includes('class') || iTitle.includes('college'))) return true;
+    if (isRotationMention && (iTitle.includes('rotation') || iTitle.includes('clinic') || iTitle.includes('hospital'))) return true;
+    if (isLabMention && iTitle.includes('lab')) return true;
+    if (isMeetingMention && iTitle.includes('meeting')) return true;
+    if (matchedSpecificTask && iTitle.includes((matchedSpecificTask.title || '').toLowerCase())) return true;
+    return false;
+  });
+
+  let freedTimeSlotStart = statedTimeMins !== null ? statedTimeMins : null;
+
+  if (matchingCommitmentItem) {
+    const commTitle = matchingCommitmentItem.title;
+    const commTitleLower = commTitle.toLowerCase();
+    const commStartM = parseTimeToMins(matchingCommitmentItem.start_time.split('T')[1].slice(0, 5));
+    const commEndM = parseTimeToMins(matchingCommitmentItem.end_time.split('T')[1].slice(0, 5));
+
+    // Find return commute / travel block after commitment
+    const returnCommuteIdx = updated.items.findIndex((it) => {
+      const itTitle = (it.title || '').toLowerCase();
+      return (
+        itTitle.includes(`transition: ${commTitleLower}`) ||
+        itTitle.includes(`buffer after ${commTitleLower}`) ||
+        (itTitle.includes(`travel: ${commTitleLower}`) && parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)) >= commEndM)
+      );
+    });
+
+    const commuteAfterDur =
+      returnCommuteIdx >= 0
+        ? Math.max(
+            15,
+            Math.round(
+              (new Date(updated.items[returnCommuteIdx].end_time).getTime() -
+                new Date(updated.items[returnCommuteIdx].start_time).getTime()) /
+                60000
+            )
+          )
+        : 30;
+
+    if (isEarlyArrival && statedTimeMins !== null && !isAllDayCancellation) {
+      // User got home at statedTimeMins (e.g. 15:00 = 3 PM)
+      // Departure from college happened before arrival: 15:00 - commuteAfterDur (e.g. 14:30)
+      const adjustedFinishMins = Math.max(commStartM + 30, statedTimeMins - commuteAfterDur);
+      matchingCommitmentItem.end_time = isoTime(
+        targetDateObj,
+        Math.floor(adjustedFinishMins / 60),
+        adjustedFinishMins % 60
+      );
+
+      what_changed.push(
+        `Shortened "${commTitle}" on ${targetDayName} to end at ${formatTime24(adjustedFinishMins)} due to early departure.`
+      );
+
+      if (returnCommuteIdx >= 0) {
+        updated.items[returnCommuteIdx].start_time = isoTime(
+          targetDateObj,
+          Math.floor(adjustedFinishMins / 60),
+          adjustedFinishMins % 60
+        );
+        updated.items[returnCommuteIdx].end_time = isoTime(
+          targetDateObj,
+          Math.floor(statedTimeMins / 60),
+          statedTimeMins % 60
+        );
+        what_changed.push(
+          `Moved return commute for "${commTitle}" to ${formatTime24(adjustedFinishMins)} – ${formatTime24(statedTimeMins)}.`
+        );
+      }
+      freedTimeSlotStart = statedTimeMins;
+    } else if (isCancelled) {
+      // Full cancellation: remove commitment and its travel/buffer blocks
+      updated.items = updated.items.filter((item) => {
+        if (item.id === matchingCommitmentItem.id) return false;
+        const iTitle = (item.title || '').toLowerCase();
+        if (
+          iTitle === `travel: ${commTitleLower}` ||
+          iTitle === `transition: ${commTitleLower}` ||
+          iTitle === `buffer after ${commTitleLower}`
+        ) {
+          return false;
+        }
+        return true;
+      });
+      what_changed.push(`Removed cancelled "${commTitle}" (and associated travel/buffer) on ${targetDayName}.`);
+      if (freedTimeSlotStart === null) {
+        freedTimeSlotStart = commStartM;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // BRANCH 2: BROAD PRODUCTIVITY REQUEST -> CONTEXTUAL OPTIONS
+  // -------------------------------------------------------------
+  if (isBroadProductive && !matchedSpecificTask && !selectedOption) {
+    const scheduledTitles = new Set(updated.items.map((it) => (it.title || '').toLowerCase()));
+    const options = [];
+
+    // Option 1: Urgent task with approaching deadline
+    const urgentCandidate = (tasks || []).find((t) => {
+      if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
+      return Boolean(t.deadline);
+    });
+    if (urgentCandidate) {
+      options.push({
+        id: urgentCandidate.id,
+        taskId: urgentCandidate.id,
+        label: `Work on "${urgentCandidate.title}"`,
+        description: `Approaching deadline (${urgentCandidate.deadline ? urgentCandidate.deadline.split('T')[0] : 'soon'}). High priority.`,
+        task: urgentCandidate,
+      });
+    }
+
+    // Option 2: High priority / core study task
+    const studyCandidate = (tasks || []).find((t) => {
+      if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
+      if (urgentCandidate && t.id === urgentCandidate.id) return false;
+      return t.priority >= 3 || t.tier === 'have_to' || t.tier === 'need_to';
+    });
+    if (studyCandidate) {
+      options.push({
+        id: studyCandidate.id,
+        taskId: studyCandidate.id,
+        label: `Focused session on "${studyCandidate.title}"`,
+        description: `${studyCandidate.duration || 60}m deep work block.`,
+        task: studyCandidate,
+      });
+    }
+
+    // Option 3: Lighter coursework or flexible focus
+    const flexibleCandidate = (tasks || []).find((t) => {
+      if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
+      if (urgentCandidate && t.id === urgentCandidate.id) return false;
+      if (studyCandidate && t.id === studyCandidate.id) return false;
+      return true;
+    });
+    if (flexibleCandidate) {
+      options.push({
+        id: flexibleCandidate.id,
+        taskId: flexibleCandidate.id,
+        label: `Review or progress "${flexibleCandidate.title}"`,
+        description: 'Light coursework or revision session.',
+        task: flexibleCandidate,
+      });
+    } else {
+      options.push({
+        id: 'flexible-focus-block',
+        taskId: null,
+        label: 'Schedule a 90m Flexible Focus Block',
+        description: 'Dedicated focus block for your backlog and independent study.',
+        task: { title: 'Flexible Focus Block', duration: 90, tier: 'need_to' },
+      });
+    }
+
+    const availableTimeStr = freedTimeSlotStart !== null ? ` after ${formatMinsFriendly(freedTimeSlotStart)}` : '';
+    return {
+      needs_choice: true,
+      question: `You have newly available time${availableTimeStr} on ${targetDayName}. How would you prefer to use it?`,
+      options: options.slice(0, 3),
+      summary: `Early arrival on ${targetDayName} opened free afternoon time.`,
+      target_date: targetDateStr,
+    };
+  }
+
+  // -------------------------------------------------------------
+  // BRANCH 3: FEASIBILITY CHECK & SCHEDULING
+  // -------------------------------------------------------------
+  const effectiveStartMins = freedTimeSlotStart !== null ? freedTimeSlotStart : 900;
+  const availableBeforeSleep = Math.max(0, latestWorkTime - effectiveStartMins);
+
+  if (effectiveStartMins >= latestWorkTime || availableBeforeSleep < 30) {
+    const conflictMsg = `Stated time (${formatMinsFriendly(effectiveStartMins)}) leaves insufficient time before wind-down (${formatMinsFriendly(latestWorkTime)}).`;
+    what_changed.push(`Cannot feasibly schedule deep-work session tonight: ${conflictMsg}`);
+    what_changed.push('Alternative: Kept your sleep window protected tonight. Orbit will schedule this session for tomorrow morning.');
+    at_risk.push({
+      id: uid(),
+      title: 'Requested study session',
+      reason: conflictMsg,
+    });
+
+    const proposalId = uid();
+    const proposal = {
+      proposal_id: proposalId,
+      status: 'pending',
+      summary: `Infeasible schedule change for ${targetDayName}: bedtime protected`,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      snapshot: [updated],
+      what_changed,
+      at_risk,
+      violations: validateScheduleInvariants(updated, wakeMins, sleepMins),
+      days: [updated],
+      schedule: updated,
+    };
+    proposals[proposalId] = proposal;
+    persistState();
+    return proposal;
+  }
+
+  // Handle delay shifts: relocate any non-fixed task starting before effectiveStartMins
+  if (isDelayed) {
+    updated.items.forEach((it) => {
+      if (!it.is_fixed && it.kind !== 'routine' && it.kind !== 'decompression') {
+        const itStart = parseTimeToMins(it.start_time.split('T')[1].slice(0, 5));
+        if (itStart < effectiveStartMins) {
+          it.status = 'displaced';
+          it.displacement_reason = `Moved because you were delayed until ${formatMinsFriendly(effectiveStartMins)}.`;
+          what_changed.push(
+            `Shifted "${it.title}" because you were delayed until ${formatMinsFriendly(effectiveStartMins)}.`
+          );
+        }
+      }
+    });
+  }
+
+  // Determine task to schedule
+  let taskToSchedule = null;
+  let taskTitle = '';
+  let taskDuration = Math.min(availableBeforeSleep, Number(preferences.focus_length) || 90);
+  let isFlexibleBlock = false;
+
+  if (selectedOption && selectedOption.task) {
+    taskToSchedule = selectedOption.task;
+    taskTitle = taskToSchedule.title || taskToSchedule.name;
+    const dur = Number(taskToSchedule.duration || taskToSchedule.estimated_duration || 90);
+    taskDuration = Math.min(availableBeforeSleep, Math.min(dur, 90));
+  } else if (matchedSpecificTask) {
+    taskToSchedule = matchedSpecificTask;
+    taskTitle = matchedSpecificTask.title || matchedSpecificTask.name;
+    const requestedDur = statedDurMins || Number(matchedSpecificTask.duration || matchedSpecificTask.estimated_duration || 60);
+    taskDuration = Math.min(availableBeforeSleep, Math.min(requestedDur, 90));
+
+    // Deadline check
+    if (matchedSpecificTask.deadline) {
+      const dlStr = matchedSpecificTask.deadline;
+      const dlDate = new Date(dlStr.includes('T') ? dlStr : dlStr + 'T23:59:00');
+      const proposedEndTime = new Date(
+        `${targetDateStr}T${pad(Math.floor((effectiveStartMins + taskDuration) / 60))}:${pad((effectiveStartMins + taskDuration) % 60)}:00`
+      );
+      if (proposedEndTime > dlDate) {
+        at_risk.push({
+          id: matchedSpecificTask.id || uid(),
+          title: taskTitle,
+          reason: `Deadline is ${dlStr}, which conflicts with scheduling after ${formatMinsFriendly(effectiveStartMins)}.`,
+        });
+        what_changed.push(
+          `Warning: "${taskTitle}" has a deadline at ${dlStr}, which falls before or during the proposed slot.`
+        );
+      }
+    }
+  } else if (wantsProductive || isCancelled || isEarlyArrival) {
+    const scheduledTitles = new Set(updated.items.map((it) => (it.title || '').toLowerCase()));
+    const candidates = (tasks || []).filter((t) => {
+      if (t.is_fixed || t.done) return false;
+      const tLower = (t.title || t.name || '').toLowerCase();
+      if (scheduledTitles.has(tLower)) return false;
+      return true;
+    });
+
+    if (candidates.length > 0) {
+      candidates.sort((a, b) => (b.priority || 3) - (a.priority || 3));
+      taskToSchedule = candidates[0];
+      taskTitle = taskToSchedule.title || taskToSchedule.name;
+      const dur = Number(taskToSchedule.duration || taskToSchedule.estimated_duration || 60);
+      taskDuration = Math.min(availableBeforeSleep, Math.min(dur, 90));
+    } else {
+      taskTitle = 'Flexible Focus Block';
+      isFlexibleBlock = true;
+      taskDuration = Math.min(availableBeforeSleep, Math.min(Number(preferences.focus_length) || 90, 90));
+    }
+  }
+
+  // Find feasible slot after effectiveStartMins
+  updated.items = updated.items.filter((it) => it.kind !== 'open');
+  const busyIntervals = updated.items
+    .filter((it) => it.status !== 'displaced')
+    .map((it) => ({
+      start: parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)),
+      end: parseTimeToMins(it.end_time.split('T')[1].slice(0, 5)),
+      item: it,
+    }))
+    .sort((a, b) => a.start - b.start);
+
+  let chosenSlotStart = null;
+  let chosenSlotEnd = null;
+  let ptr = effectiveStartMins;
+
+  for (const b of busyIntervals) {
+    if (b.end <= ptr) continue;
+    if (b.start > ptr) {
+      const freeLen = b.start - ptr;
+      if (freeLen >= Math.min(taskDuration, 45)) {
+        chosenSlotStart = ptr;
+        chosenSlotEnd = ptr + Math.min(freeLen, taskDuration);
+        break;
+      }
+    }
+    ptr = Math.max(ptr, b.end);
+  }
+
+  if (chosenSlotStart === null && latestWorkTime - ptr >= Math.min(taskDuration, 30)) {
+    chosenSlotStart = ptr;
+    chosenSlotEnd = ptr + Math.min(latestWorkTime - ptr, taskDuration);
+  }
+
+  if (chosenSlotStart !== null && chosenSlotEnd !== null && taskTitle) {
+    const startH = Math.floor(chosenSlotStart / 60);
+    const startM = chosenSlotStart % 60;
+    const endH = Math.floor(chosenSlotEnd / 60);
+    const endM = chosenSlotEnd % 60;
+
+    updated.items.push({
+      id: uid(),
+      task_id: taskToSchedule ? taskToSchedule.id : null,
+      title: taskTitle,
+      kind: 'deep',
+      tier: 'need_to',
+      start_time: isoTime(targetDateObj, startH, startM),
+      end_time: isoTime(targetDateObj, endH, endM),
+      status: 'scheduled',
+      is_fixed: false,
+      done: false,
+      displaced_by_task_id: null,
+      displacement_reason: null,
+      suggestion: isFlexibleBlock
+        ? 'Flexible productive block: use for high-priority coursework, revision, or deep-work backlog.'
+        : null,
+      move_count: 0,
+    });
+
+    what_changed.push(
+      `Scheduled ${isFlexibleBlock ? 'Flexible Focus Block' : `"${taskTitle}"`} (${formatTime24(chosenSlotStart)} – ${formatTime24(chosenSlotEnd)}).`
+    );
+
+    // 15-min Recovery Buffer
+    const bufferEnd = chosenSlotEnd + 15;
+    const nextBusy = busyIntervals.find((b) => b.start >= chosenSlotEnd);
+    const bufferFits = (!nextBusy || nextBusy.start >= bufferEnd) && bufferEnd <= latestWorkTime;
+
+    if (bufferFits) {
+      updated.items.push({
+        id: uid(),
+        task_id: null,
+        title: 'Recovery Buffer',
+        kind: 'break',
+        tier: 'like_to',
+        start_time: isoTime(targetDateObj, endH, endM),
+        end_time: isoTime(targetDateObj, Math.floor(bufferEnd / 60), bufferEnd % 60),
+        status: 'scheduled',
+        is_fixed: true,
+        done: false,
+        displaced_by_task_id: null,
+        displacement_reason: null,
+        suggestion: null,
+        move_count: 0,
+      });
+      what_changed.push('Added a 15-min recovery buffer to recharge after focus time.');
+    }
+  }
+
+  // Rebuild Open Blocks for any remaining free intervals >= 45m
+  updated.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+  let openPtr = wakeMins;
+  const finalBusy = updated.items
+    .filter((it) => it.status !== 'displaced')
+    .map((it) => ({
+      start: parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)),
+      end: parseTimeToMins(it.end_time.split('T')[1].slice(0, 5)),
+    }));
+
+  for (const b of finalBusy) {
+    if (b.start > openPtr && b.start - openPtr >= 45) {
+      const freeStart = openPtr;
+      const freeEnd = Math.min(latestWorkTime, b.start);
+      if (freeEnd - freeStart >= 45) {
+        updated.items.push({
+          id: uid(),
+          task_id: null,
+          title: 'Open Block',
+          kind: 'open',
+          tier: 'like_to',
+          start_time: isoTime(targetDateObj, Math.floor(freeStart / 60), freeStart % 60),
+          end_time: isoTime(targetDateObj, Math.floor(freeEnd / 60), freeEnd % 60),
+          status: 'scheduled',
+          is_fixed: true,
+          done: false,
+          suggestion: 'Unstructured personal window: recharge or use flexibly.',
+          move_count: 0,
+        });
+      }
+    }
+    openPtr = Math.max(openPtr, b.end);
+  }
+
+  if (latestWorkTime - openPtr >= 45) {
+    updated.items.push({
+      id: uid(),
+      task_id: null,
+      title: 'Open Block',
+      kind: 'open',
+      tier: 'like_to',
+      start_time: isoTime(targetDateObj, Math.floor(openPtr / 60), openPtr % 60),
+      end_time: isoTime(targetDateObj, Math.floor(latestWorkTime / 60), latestWorkTime % 60),
+      status: 'scheduled',
+      is_fixed: true,
+      done: false,
+      suggestion: 'Open personal window: ease into your evening.',
+      move_count: 0,
+    });
+  }
+
+  updated.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
+
+  let summary = `Disruption proposal for ${targetDayName}`;
+  if (isEarlyArrival && chosenSlotStart !== null) {
+    summary = `Adjusted ${targetDayName}: early arrival opened slot for ${taskTitle} at ${formatTime24(chosenSlotStart)}`;
+  } else if (isCancelled && chosenSlotStart !== null) {
+    summary = `Adjusted ${targetDayName}: cancelled commitments opened slot for ${taskTitle} at ${formatTime24(chosenSlotStart)}`;
+  } else if (chosenSlotStart !== null) {
+    summary = `Scheduled ${taskTitle} at ${formatTime24(chosenSlotStart)} on ${targetDayName}`;
+  }
+
+  const proposalId = uid();
+  const proposal = {
+    proposal_id: proposalId,
+    status: 'pending',
+    summary,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    snapshot: [updated],
+    what_changed,
+    at_risk,
+    violations: validateScheduleInvariants(updated, wakeMins, sleepMins),
+    days: [updated],
+    schedule: updated,
+  };
+  proposals[proposalId] = proposal;
+  persistState();
+  return proposal;
+}
+
+/**
+ * Approve a pending proposal: copy its snapshot into the active schedules.
+ */
+export async function approveProposal(proposalId) {
+  await delay(150);
+  const proposal = proposals[proposalId];
+  if (!proposal) throw Object.assign(new Error('Proposal not found'), { response: { data: { detail: 'Proposal not found' } } });
+  if (proposal.status !== 'pending') throw Object.assign(new Error(`Proposal is already ${proposal.status}`), { response: { data: { detail: `Proposal is already ${proposal.status}` } } });
+
+  // Activate: copy each snapshot day into the active schedules array
+  for (const proposed of proposal.snapshot) {
+    const existingIdx = schedules.findIndex((s) => s.date === proposed.date);
+    if (existingIdx >= 0) {
+      // Preserve done state from active schedule
+      const existingDone = new Set(
+        schedules[existingIdx].items.filter((it) => it.done).map((it) => (it.title || '').toLowerCase())
+      );
+      proposed.items.forEach((it) => {
+        if (it.title && existingDone.has(it.title.toLowerCase())) {
+          it.done = true;
+        }
+      });
+      schedules[existingIdx] = proposed;
+    } else {
+      schedules.push(proposed);
+    }
+  }
+  proposal.status = 'approved';
+  persistState();
+
+  const targetDateStr = proposal.snapshot[0]?.date || ymd(todayDate());
+  const activeSched = schedules.find((s) => s.date === targetDateStr) || schedules.find((s) => s.date === ymd(todayDate()));
+  return {
+    message: 'Proposal approved and schedule successfully activated',
+    proposal_id: proposalId,
+    status: 'approved',
+    schedule: activeSched || null,
+  };
+}
+
+/**
+ * Reject a pending proposal: discard it, active schedule stays unchanged.
+ */
+export async function rejectProposal(proposalId) {
+  await delay(100);
+  const proposal = proposals[proposalId];
+  if (!proposal) throw Object.assign(new Error('Proposal not found'), { response: { data: { detail: 'Proposal not found' } } });
+  if (proposal.status !== 'pending') throw Object.assign(new Error(`Proposal is already ${proposal.status}`), { response: { data: { detail: `Proposal is already ${proposal.status}` } } });
+
+  proposal.status = 'rejected';
+  persistState();
+  return {
+    message: 'Proposal rejected successfully',
+    proposal_id: proposalId,
+    status: 'rejected',
+  };
+}
+
 export async function sendFeedback(text) {
   await delay();
   const textLower = (text || '').toLowerCase();
@@ -2247,6 +3122,7 @@ export async function savePreferences(prefs) {
   await delay();
   preferences = { ...preferences, ...prefs };
   onboarded = true;
+  invalidateUnclosedSchedules();
   persistState();
   return preferences;
 }

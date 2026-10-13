@@ -19,10 +19,15 @@ import {
   CalendarCheck,
   ChevronRight,
   RotateCcw,
+  ThumbsUp,
+  Trash2,
 } from 'lucide-react';
 import {
   getSchedule,
   generateSchedule,
+  proposeSchedule,
+  approveProposal,
+  rejectProposal,
   sendNote,
   saveNote,
   setItemDone,
@@ -98,6 +103,11 @@ export function Today() {
   // Re-plan result display (Here is what changed / Keep or Undo)
   const [replanResult, setReplanResult] = useState(null);
 
+  // Proposal state
+  const [proposal, setProposal] = useState(null);
+  const [approving, setApproving] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+
   // Load schedule for selected date asynchronously
   const fetchSchedule = useCallback(async () => {
     setLoading(true);
@@ -158,12 +168,41 @@ export function Today() {
     setGenerating(true);
     setError('');
     try {
-      const data = await generateSchedule(selectedDate);
-      setSchedule(data);
+      const data = await proposeSchedule(selectedDate);
+      setProposal(data);
     } catch (err) {
       setError(errText(err));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleApproveProposal = async () => {
+    if (!proposal || approving || discarding) return;
+    setApproving(true);
+    setError('');
+    try {
+      await approveProposal(proposal.proposal_id);
+      setProposal(null);
+      await fetchSchedule();
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setApproving(false);
+    }
+  };
+
+  const handleRejectProposal = async () => {
+    if (!proposal || approving || discarding) return;
+    setDiscarding(true);
+    setError('');
+    try {
+      await rejectProposal(proposal.proposal_id);
+      setProposal(null);
+    } catch (err) {
+      setError(errText(err));
+    } finally {
+      setDiscarding(false);
     }
   };
 
@@ -599,6 +638,98 @@ export function Today() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Pending Proposal Review */}
+      {proposal && (
+        <div className="changed-result-card" style={{ marginTop: 'var(--space-4)' }}>
+          <div className="changed-result-header">
+            <div>
+              <span className="tag tag-accent" style={{ marginBottom: 'var(--space-1)' }}>
+                Proposed Plan
+              </span>
+              <h2 style={{ fontFamily: 'var(--font-display)', margin: 0, fontSize: 'var(--text-md)' }}>
+                {proposal.summary || 'Review proposed changes'}
+              </h2>
+            </div>
+            <span className="text-muted" style={{ fontSize: 'var(--text-xs)', fontFamily: 'var(--font-mono)' }}>
+              Active schedule unchanged until approved
+            </span>
+          </div>
+
+          <div className="changed-list">
+            {(proposal.what_changed || []).map((change, idx) => (
+              <div key={idx} className="changed-list-item">
+                <CheckCircle2 size={16} className="changed-list-icon" strokeWidth={1.5} />
+                <span>{change}</span>
+              </div>
+            ))}
+          </div>
+
+          {proposal.at_risk?.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+              {proposal.at_risk.map((item, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    backgroundColor: 'var(--surface-2)',
+                    border: '1px solid var(--line)',
+                    padding: 'var(--space-3)',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: 'var(--text-xs)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-2)',
+                  }}
+                >
+                  <AlertCircle size={14} strokeWidth={1.5} style={{ color: 'var(--accent)' }} />
+                  <span>
+                    <strong>{item.title}</strong>: {item.reason}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="changed-actions-bar">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleRejectProposal}
+              disabled={approving || discarding}
+            >
+              {discarding ? (
+                <>
+                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                  <span>Discarding…</span>
+                </>
+              ) : (
+                <>
+                  <Trash2 size={14} strokeWidth={1.5} />
+                  <span>Discard proposal</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleApproveProposal}
+              disabled={approving || discarding}
+            >
+              {approving ? (
+                <>
+                  <Loader2 size={14} className="spin" strokeWidth={1.5} />
+                  <span>Approving…</span>
+                </>
+              ) : (
+                <>
+                  <ThumbsUp size={14} strokeWidth={1.5} />
+                  <span>Approve plan</span>
+                </>
+              )}
+            </button>
+          </div>
         </div>
       )}
 
