@@ -1,4 +1,4 @@
-import unittest
+﻿import unittest
 from datetime import date, datetime, time, timedelta
 
 from app.services.rule_engine import (
@@ -53,6 +53,66 @@ class TestRuleEngineReliability(unittest.TestCase):
             self.assertLessEqual(p.end, datetime.combine(p.start.date(), time(20, 0)))
         violations = validate_plan(plan.placements, {"t1": tasks[0]}, fixed, prefs, self.now)
         self.assertEqual(violations, [])
+
+
+    def test_overnight_sleep_respects_same_day_study_cutoff(self):
+        """Overnight sleep must not let study placements cross the evening cutoff."""
+        from dataclasses import replace
+
+        prefs = Prefs(
+            wake=time(7, 0),
+            sleep=time(1, 0),
+            no_study_after=time(23, 0),
+            morning_routine_minutes=30,
+            wind_down_minutes=30,
+            focus_duration=120,
+            allow_splitting=True,
+            daily_cap_minutes=480,
+        )
+        tasks = [PlanTask("overnight", "Study", 120, priority=3)]
+
+        plan = generate_plan(
+            tasks, [], prefs, self.now, horizon_days=0
+        )
+
+        self.assertTrue(plan.placements, "Expected a valid study placement")
+        for placement in plan.placements:
+            self.assertGreaterEqual(
+                placement.start,
+                datetime(2026, 10, 12, 7, 30),
+            )
+            self.assertLessEqual(
+                placement.end,
+                datetime(2026, 10, 12, 23, 0),
+            )
+
+        violations = validate_plan(
+            plan.placements,
+            {"overnight": tasks[0]},
+            [],
+            prefs,
+            self.now,
+        )
+        self.assertEqual(violations, [])
+
+        # A placement crossing the 23:00 cutoff must be rejected.
+        crossing_cutoff = replace(
+            plan.placements[0],
+            start=datetime(2026, 10, 12, 22, 45),
+            end=datetime(2026, 10, 12, 23, 15),
+        )
+        violations = validate_plan(
+            [crossing_cutoff],
+            {"overnight": tasks[0]},
+            [],
+            prefs,
+            self.now,
+        )
+        self.assertTrue(
+            violations,
+            "Validator accepted a placement beyond the 23:00 cutoff",
+        )
+
 
     def test_fixed_commitments_and_commute_buffers(self):
         """Fixed commitments must be padded with commute + 5 min transition buffer."""

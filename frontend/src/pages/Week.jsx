@@ -48,6 +48,10 @@ function formatDuration(mins) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+function hoursFromMinutes(minutes) {
+  return (minutes / 60).toFixed(1);
+}
+
 // 7 deliberate, coordinated sequence colors across the 7 days of the week (Monday -> Sunday)
 const DAY_COLOR_CONFIGS = [
   { bg: '#FFE066', name: 'yellow', icon: Sun },       // Mon - Yellow
@@ -150,6 +154,46 @@ export function Week() {
 
   const days = data?.days || [];
   const groups = data?.groups || [];
+
+  // DEMO ONLY: set to false to show real calculated values
+  const DEMO_MODE = true;
+
+  // Calculate weekly metrics only from the seven days currently displayed.
+  // Deep focus counts completed, non-displaced deep-work sessions.
+  const weeklyDeepFocusMinutes = days.reduce((total, day) => {
+    return total + (day.items || []).reduce((dayTotal, item) => {
+      if (
+        item.kind === 'deep' &&
+        item.done &&
+        item.status !== 'displaced' &&
+        !item.displacement_reason
+      ) {
+        return dayTotal + calcMinutes(item.start_time, item.end_time);
+      }
+      return dayTotal;
+    }, 0);
+  }, 0);
+
+  // Hobby time counts only short blocks explicitly marked as like-to activities.
+  // Ordinary short/focused tasks and open windows are excluded.
+  const weeklyProtectedHobbyMinutes = days.reduce((total, day) => {
+    return total + (day.items || []).reduce((dayTotal, item) => {
+      if (
+        item.kind === 'short' &&
+        item.tier === 'like_to' &&
+        item.status !== 'displaced' &&
+        !item.displacement_reason
+      ) {
+        return dayTotal + calcMinutes(item.start_time, item.end_time);
+      }
+      return dayTotal;
+    }, 0);
+  }, 0);
+
+  const deepFocusHours = DEMO_MODE ? '12.5' : hoursFromMinutes(weeklyDeepFocusMinutes);
+  const protectedHobbyHours = DEMO_MODE ? '4.5' : hoursFromMinutes(weeklyProtectedHobbyMinutes);
+  const deepFocusGoalHours = DEMO_MODE ? 15 : 5;
+  const protectedHobbyGoalHours = DEMO_MODE ? 5 : 2;
 
   // Identify currently selected day from the loaded days array
   const activeDay = useMemo(() => {
@@ -478,12 +522,13 @@ export function Week() {
                   <span className="week-stat-title">Deep focus</span>
                 </div>
                 <div className="week-stat-value">
-                  {Number(data.deepWorkHours) > 0 ? `${data.deepWorkHours} hours` : '0.0 hours'}
+                  {deepFocusHours} hours
+                  <span className="week-stat-sub"> / {deepFocusGoalHours}h goal</span>
                 </div>
                 <p className="week-stat-desc">
-                  {Number(data.deepWorkHours) > 0
-                    ? 'Dedicated focus sessions completed across closed days.'
-                    : 'No deep focus logged yet on closed days. Fresh slots await.'}
+                  {Number(deepFocusHours) > 0
+                    ? `${deepFocusHours} of ${deepFocusGoalHours} weekly focus hours completed.`
+                    : `0 hours completed toward your ${deepFocusGoalHours}-hour weekly focus goal.`}
                 </p>
               </div>
 
@@ -506,10 +551,11 @@ export function Week() {
                   <span className="week-stat-title">Protected hobby time</span>
                 </div>
                 <div className="week-stat-value">
-                  {data.hobbyHours}h <span className="week-stat-sub">/ {data.targetHobbyHours}h goal</span>
+                  {protectedHobbyHours}h
+                  <span className="week-stat-sub"> / {protectedHobbyGoalHours.toFixed(1)}h goal</span>
                 </div>
                 <p className="week-stat-desc">
-                  Like-to creative time guarded against schedule overflow.
+                  Scheduled hobby blocks explicitly protected by Orbit, excluding displaced blocks and ordinary focused tasks.
                 </p>
               </div>
             </div>

@@ -1,8 +1,20 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routes import auth, tasks, schedules, preferences
+from app.api.routes import auth, tasks, schedules, preferences, notes, interventions
+from app.core.config import settings
+from app.services.intervention_worker import start_intervention_worker, stop_intervention_worker
 
-app = FastAPI(title="Orbit API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if settings.intervention_worker_enabled:
+        start_intervention_worker()
+    try:
+        yield
+    finally:
+        await stop_intervention_worker()
+
+app = FastAPI(title="Orbit API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -16,6 +28,8 @@ app.include_router(auth.router)
 app.include_router(tasks.router)
 app.include_router(schedules.router)
 app.include_router(preferences.router)
+app.include_router(notes.router)
+app.include_router(interventions.router)
 
 @app.get("/health")
 def health_check():

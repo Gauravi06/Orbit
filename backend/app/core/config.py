@@ -1,6 +1,8 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     database_url: str
     gemini_api_key: str
     jwt_secret: str
@@ -8,7 +10,8 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 14
 
-    class Config:
-        env_file = ".env"
+    intervention_poll_interval_seconds: int = 60
+    intervention_worker_enabled: bool = True
+    intervention_approaching_hours: int = 24
 
 settings = Settings()

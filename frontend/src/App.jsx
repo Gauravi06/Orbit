@@ -6,6 +6,7 @@ import Today from './pages/Today';
 import Week from './pages/Week';
 import Changed from './pages/Changed';
 import Tasks from './pages/Tasks';
+import Insights from './pages/Insights';
 import './styles/base.css';
 
 function AuthGuard({ children }) {
@@ -60,6 +61,14 @@ export function App() {
           element={
             <AuthGuard>
               <Tasks />
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/insights"
+          element={
+            <AuthGuard>
+              <Insights />
             </AuthGuard>
           }
         />

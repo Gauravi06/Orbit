@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -10,10 +10,14 @@ import {
   RotateCcw,
   Check,
   Columns,
+  Bell,
+  AlertTriangle,
+  Clock,
+  X,
 } from 'lucide-react';
 import ThemeToggle from './ThemeToggle';
 import { useTheme, PALETTES } from '../theme/useTheme';
-import { resetDemo } from '../api/client';
+import { resetDemo, seedDemoStudent, getInterventions, dismissIntervention, snoozeIntervention } from '../api/client';
 import './Shell.css';
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
@@ -39,11 +43,66 @@ export function Shell({ children }) {
     window.location.reload();
   };
 
+  const handleSeedDemoStudent = async () => {
+    await seedDemoStudent();
+    setMenuOpen(false);
+    navigate('/today');
+    window.location.reload();
+  };
+
+  const [interventions, setInterventions] = useState([]);
+  const [bellOpen, setBellOpen] = useState(false);
+  const bellRef = useRef(null);
+
+  const fetchInterventions = useCallback(async () => {
+    try {
+      const list = await getInterventions('active');
+      setInterventions(Array.isArray(list) ? list : []);
+    } catch {
+      // Ignore background fetch errors in shell
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInterventions();
+    const interval = setInterval(fetchInterventions, 30000);
+    const handleUpdate = () => fetchInterventions();
+    window.addEventListener('orbit-interventions-updated', handleUpdate);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('orbit-interventions-updated', handleUpdate);
+    };
+  }, [fetchInterventions]);
+
+  const handleSnooze = async (id, hours = 3) => {
+    try {
+      const snoozeUntil = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      await snoozeIntervention(id, snoozeUntil);
+      await fetchInterventions();
+      window.dispatchEvent(new Event('orbit-interventions-updated'));
+    } catch (e) {
+      console.error('Failed to snooze intervention', e);
+    }
+  };
+
+  const handleDismiss = async (id) => {
+    try {
+      await dismissIntervention(id);
+      await fetchInterventions();
+      window.dispatchEvent(new Event('orbit-interventions-updated'));
+    } catch (e) {
+      console.error('Failed to dismiss intervention', e);
+    }
+  };
+
   // Close dropdown on outside click
   useEffect(() => {
     function handleClickOutside(event) {
       if (menuRef.current && !menuRef.current.contains(event.target)) {
         setMenuOpen(false);
+      }
+      if (bellRef.current && !bellRef.current.contains(event.target)) {
+        setBellOpen(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -98,10 +157,95 @@ export function Shell({ children }) {
               <CheckSquare size={15} strokeWidth={1.5} />
               <span>Tasks</span>
             </NavLink>
+            <NavLink
+              to="/insights"
+              className={({ isActive }) =>
+                `shell-nav-link ${isActive ? 'active' : ''}`
+              }
+            >
+              <Sparkles size={15} strokeWidth={1.5} />
+              <span>What Orbit learned</span>
+            </NavLink>
           </nav>
 
           {/* Right actions: ThemeToggle + User Menu */}
           <div className="shell-actions">
+            {/* Proactive Intervention Notification Bell */}
+            <div className="shell-bell-wrapper" ref={bellRef}>
+              <button
+                type="button"
+                className="shell-bell-btn"
+                onClick={() => setBellOpen(!bellOpen)}
+                aria-label={`Interventions (${interventions.length} active)`}
+                aria-expanded={bellOpen}
+              >
+                <Bell size={15} strokeWidth={2.2} />
+                {interventions.length > 0 && (
+                  <span className="shell-bell-badge" aria-hidden="true">
+                    {interventions.length}
+                  </span>
+                )}
+              </button>
+
+              {bellOpen && (
+                <div className="shell-bell-popover" role="dialog" aria-label="Active Interventions">
+                  <div className="shell-bell-header">
+                    <span className="shell-bell-title">
+                      <AlertTriangle size={14} strokeWidth={2.5} style={{ color: '#FF5500' }} />
+                      Proactive Alerts ({interventions.length})
+                    </span>
+                    <button
+                      type="button"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2 }}
+                      onClick={() => setBellOpen(false)}
+                      aria-label="Close notifications"
+                    >
+                      <X size={13} strokeWidth={2.2} />
+                    </button>
+                  </div>
+
+                  {interventions.length === 0 ? (
+                    <div className="shell-bell-empty">
+                      All caught up! No urgent deadline alerts right now.
+                    </div>
+                  ) : (
+                    interventions.map((inv) => (
+                      <div
+                        key={inv.id}
+                        className={`shell-intervention-item ${inv.intervention_type === 'overdue' ? 'overdue' : (inv.intervention_type === 'repeated_unfinished' ? 'repeated-unfinished' : 'approaching')}`}
+                      >
+                        <div className="shell-intervention-item-title">
+                          <AlertTriangle size={13} strokeWidth={2.2} />
+                          <span>{inv.title}</span>
+                        </div>
+                        <div className="shell-intervention-item-msg">{inv.message}</div>
+                        <div className="shell-intervention-actions">
+                          <button
+                            type="button"
+                            className="shell-intervention-btn snooze"
+                            onClick={() => handleSnooze(inv.id, 3)}
+                            title="Snooze for 3 hours"
+                          >
+                            <Clock size={11} strokeWidth={2} />
+                            <span>Snooze 3h</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="shell-intervention-btn dismiss"
+                            onClick={() => handleDismiss(inv.id)}
+                            title="Dismiss alert"
+                          >
+                            <X size={11} strokeWidth={2} />
+                            <span>Dismiss</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
             <ThemeToggle showLabel={false} />
 
             <div className="shell-user-menu" ref={menuRef}>
@@ -179,14 +323,24 @@ export function Shell({ children }) {
                   </div>
 
                   {IS_MOCK && (
-                    <button
-                      type="button"
-                      className="shell-dropdown-item"
-                      onClick={handleResetDemo}
-                    >
-                      <RotateCcw size={13} strokeWidth={1.5} />
-                      <span>Reset demo</span>
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className="shell-dropdown-item"
+                        onClick={handleSeedDemoStudent}
+                      >
+                        <Sparkles size={13} strokeWidth={1.5} style={{ color: 'var(--pop-yellow)' }} />
+                        <span>Load 14-day demo</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="shell-dropdown-item"
+                        onClick={handleResetDemo}
+                      >
+                        <RotateCcw size={13} strokeWidth={1.5} />
+                        <span>Reset demo</span>
+                      </button>
+                    </>
                   )}
                   <div className="shell-dropdown-divider" />
                   <button
@@ -244,6 +398,15 @@ export function Shell({ children }) {
         >
           <CheckSquare size={18} strokeWidth={1.5} />
           <span>Tasks</span>
+        </NavLink>
+        <NavLink
+          to="/insights"
+          className={({ isActive }) =>
+            `shell-mobile-link ${isActive ? 'active' : ''}`
+          }
+        >
+          <Sparkles size={18} strokeWidth={1.5} />
+          <span>Learned</span>
         </NavLink>
       </nav>
     </div>

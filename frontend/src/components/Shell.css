@@ -297,3 +297,191 @@ html[data-mode="dark"] .shell-dropdown {
   border: 2px solid #111111;
   box-shadow: 2px 2px 0 #111111;
 }
+
+/* --------------------------------------------------------------------------
+   Interventions Notification Bell & Popover
+   -------------------------------------------------------------------------- */
+.shell-bell-wrapper {
+  position: relative;
+}
+
+.shell-bell-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 2px solid #111111;
+  background-color: #FFFDF8;
+  box-shadow: 2px 2px 0 #111111;
+  border-radius: var(--pop-radius-sm, 10px);
+  cursor: pointer;
+  color: #111111;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.shell-bell-btn:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 3px 3px 0 #111111;
+}
+
+.shell-bell-badge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  background-color: #FF5500;
+  color: #FFFFFF;
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 10px;
+  font-weight: 900;
+  min-width: 17px;
+  height: 17px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid #111111;
+  box-shadow: 1px 1px 0 #111111;
+  padding: 0 3px;
+}
+
+.shell-bell-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  background-color: #FFFDF8;
+  color: #111111;
+  border: 3px solid #111111;
+  border-radius: var(--pop-radius-sm, 12px);
+  box-shadow: 4px 4px 0 #111111;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 200;
+}
+
+html[data-mode="dark"] .shell-bell-popover {
+  background-color: #242220;
+  color: #FFFDF8;
+}
+
+.shell-bell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 2px solid #111111;
+  padding-bottom: 6px;
+}
+
+.shell-bell-title {
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 13px;
+  font-weight: 900;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.shell-bell-empty {
+  padding: 16px 8px;
+  text-align: center;
+  font-size: 12px;
+  color: #777777;
+  font-weight: 500;
+}
+
+.shell-intervention-item {
+  border: 2px solid #111111;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background-color: #FFFBE6;
+  box-shadow: 2px 2px 0 #111111;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+html[data-mode="dark"] .shell-intervention-item {
+  background-color: #2F2A1E;
+}
+
+.shell-intervention-item.overdue {
+  background-color: #FFE6E6;
+}
+
+html[data-mode="dark"] .shell-intervention-item.overdue {
+  background-color: #382222;
+}
+
+.shell-intervention-item.repeated-unfinished {
+  background-color: #EDE4FF;
+}
+
+html[data-mode="dark"] .shell-intervention-item.repeated-unfinished {
+  background-color: #2D2338;
+}
+
+.shell-intervention-item-title {
+  font-size: 12px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #111111;
+}
+
+html[data-mode="dark"] .shell-intervention-item-title {
+  color: #FFFDF8;
+}
+
+.shell-intervention-item-msg {
+  font-size: 11px;
+  font-weight: 500;
+  color: #444444;
+  line-height: 1.35;
+}
+
+html[data-mode="dark"] .shell-intervention-item-msg {
+  color: #D2C9BE;
+}
+
+.shell-intervention-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.shell-intervention-btn {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1.5px solid #111111;
+  cursor: pointer;
+  box-shadow: 1.5px 1.5px 0 #111111;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: transform 0.1s ease;
+}
+
+.shell-intervention-btn:hover {
+  transform: translate(-1px, -1px);
+}
+
+.shell-intervention-btn.snooze {
+  background-color: #FFE066;
+  color: #111111;
+}
+
+.shell-intervention-btn.dismiss {
+  background-color: #FFFDF8;
+  color: #111111;
+}

@@ -18,7 +18,8 @@ import {
   Heart,
   BookOpen,
 } from 'lucide-react';
-import { saveOnboarding, generateSchedule } from '../api/client';
+import { saveOnboarding, generateSchedule, errText } from '../api/client';
+import { getUniqueAnchors, getFocusLabel } from './onboardingHelpers';
 import { useTheme } from '../theme/useTheme';
 import ThemeToggle from '../components/ThemeToggle';
 import { formatTime12 } from '../utils/timeFormat';
@@ -62,6 +63,7 @@ const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 export function Onboarding() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [finishError, setFinishError] = useState(null);
   const { mode, palette, setMode, setPalette } = useTheme();
   const [modePreference, setModePreference] = useState('device');
 
@@ -136,7 +138,9 @@ export function Onboarding() {
   const handleAddCommitment = () => {
     if (!draftCommitment.name.trim()) return;
     const newId = 'comm_' + Date.now();
-    const days = profile.week_structure === 'same_weekdays' ? 'Monday–Friday' : activeDayTab;
+    const days = (profile.week_structure === 'same_weekdays' || profile.week_structure === 'no_pref')
+      ? 'Monday–Friday'
+      : activeDayTab;
 
     const newComm = {
       id: newId,
@@ -255,6 +259,7 @@ export function Onboarding() {
 
   // Onboarding completion
   const handleFinish = async () => {
+    setFinishError(null);
     setLoading(true);
     try {
       // Map focus style to legacy number for backward-compatible mock helpers
@@ -325,11 +330,11 @@ export function Onboarding() {
 
       await saveOnboarding(payload);
       await generateSchedule();
-    } catch {
-      // Ignore network errors in demo mode and proceed
+      navigate('/today');
+    } catch (err) {
+      setFinishError(errText(err));
     } finally {
       setLoading(false);
-      navigate('/today');
     }
   };
 
@@ -396,6 +401,7 @@ export function Onboarding() {
               type="button"
               className="onboarding-skip-btn"
               onClick={handleFinish}
+              disabled={loading}
             >
               Skip setup
             </button>
@@ -1266,6 +1272,8 @@ export function Onboarding() {
               {/* Dynamic Narrative Review */}
               <div className="narrative-box">
                 {(() => {
+                  const uniqueAnchors = getUniqueAnchors(profile.fixed_commitments);
+                  const focusLabel = getFocusLabel(profile.focus_style);
                   const wakeLabel = profile.wake_time === 'no_pref' ? 'Flexible (Default 7:00 AM)' : formatTime12(profile.wake_time);
                   const sleepLabel = profile.sleep_time === 'no_pref' ? 'Flexible (Default 11:30 PM)' : formatTime12(profile.sleep_time);
                   return `Orbit learned that your active rhythm is ${wakeLabel} → ${sleepLabel} with ${
@@ -1394,6 +1402,18 @@ export function Onboarding() {
                 </div>
               </div>
             </>
+          )}
+
+          {/* Error banner — shown on any step when handleFinish fails */}
+          {finishError && (
+            <div role="alert" className="onboarding-error-banner">
+              <span><strong>Setup failed:</strong> {finishError}</span>
+              <div>
+                <button type="button" className="btn btn-secondary" onClick={() => { setFinishError(null); handleFinish(); }} disabled={loading} style={{fontSize: 'var(--text-xs)'}}>
+                  Dismiss and retry
+                </button>
+              </div>
+            </div>
           )}
 
           {/* Step Navigation Footer Controls */}

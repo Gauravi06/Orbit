@@ -44,6 +44,9 @@ import {
   replanSchedule,
   checkNoteVague,
   errText,
+  getInterventions,
+  dismissIntervention,
+  snoozeIntervention,
 } from '../api/client';
 import { findCurrentOrNextBlockIndex, getBlockTimeStatus } from './todayTimeSelection';
 import './Today.css';
@@ -113,6 +116,7 @@ export function Today() {
   const [noteText, setNoteText] = useState('');
   const [noteLoading, setNoteLoading] = useState(false);
   const [confirmCard, setConfirmCard] = useState(null);
+  const [noteError, setNoteError] = useState('');
 
   // Clarifying modal for vague notes
   const [vagueModalOpen, setVagueModalOpen] = useState(false);
@@ -127,6 +131,46 @@ export function Today() {
   // Proposal state
   const [proposal, setProposal] = useState(null);
   const [approving, setApproving] = useState(false);
+
+  // Proactive interventions state
+  const [activeInterventions, setActiveInterventions] = useState([]);
+
+  const fetchActiveInterventions = useCallback(async () => {
+    try {
+      const list = await getInterventions('active');
+      setActiveInterventions(Array.isArray(list) ? list : []);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchActiveInterventions();
+    const handleUpdate = () => fetchActiveInterventions();
+    window.addEventListener('orbit-interventions-updated', handleUpdate);
+    return () => window.removeEventListener('orbit-interventions-updated', handleUpdate);
+  }, [fetchActiveInterventions]);
+
+  const handleSnoozeIntervention = async (id, hours = 3) => {
+    try {
+      const snoozeUntil = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      await snoozeIntervention(id, snoozeUntil);
+      await fetchActiveInterventions();
+      window.dispatchEvent(new Event('orbit-interventions-updated'));
+    } catch (e) {
+      console.error('Failed to snooze intervention', e);
+    }
+  };
+
+  const handleDismissIntervention = async (id) => {
+    try {
+      await dismissIntervention(id);
+      await fetchActiveInterventions();
+      window.dispatchEvent(new Event('orbit-interventions-updated'));
+    } catch (e) {
+      console.error('Failed to dismiss intervention', e);
+    }
+  };
   const [discarding, setDiscarding] = useState(false);
 
   // Touch tracking for swipe gestures
@@ -410,7 +454,16 @@ export function Today() {
       });
       setOffModalOpen(false);
       setOffDetail('');
-      setReplanResult(res);
+      if (res.proposal) {
+        setProposal(res.proposal);
+        setReplanResult(null);
+        setWorksMessage(res.message || 'Proposed schedule adjustment created. Review and approve below.');
+        setTimeout(() => setWorksMessage(''), 5000);
+      } else {
+        setReplanResult(res);
+        setWorksMessage(res.message || 'Feedback recorded. Active schedule unchanged.');
+        setTimeout(() => setWorksMessage(''), 5000);
+      }
       await fetchSchedule();
     } catch (err) {
       setError(errText(err));
@@ -426,6 +479,7 @@ export function Today() {
 
     setNoteLoading(true);
     setError('');
+    setNoteError('');
     try {
       const understoodData = await sendNote(noteText.trim());
       setConfirmCard({
@@ -435,7 +489,9 @@ export function Today() {
         rawText: noteText.trim(),
       });
     } catch (err) {
-      setError(errText(err));
+      const msg = errText(err);
+      setError(msg);
+      setNoteError(msg);
     } finally {
       setNoteLoading(false);
     }
@@ -457,6 +513,7 @@ export function Today() {
   const executeSaveAndReplan = async (cardData, clarification = '') => {
     setNoteLoading(true);
     setError('');
+    setNoteError('');
     try {
       await saveNote({
         text: cardData.rawText,
@@ -470,10 +527,21 @@ export function Today() {
 
       setConfirmCard(null);
       setNoteText('');
-      setReplanResult(res);
+      if (res.proposal) {
+        setProposal(res.proposal);
+        setReplanResult(null);
+        setWorksMessage(res.message || 'Proposed schedule adjustment created. Review and approve below.');
+        setTimeout(() => setWorksMessage(''), 5000);
+      } else {
+        setReplanResult(res);
+        setWorksMessage(res.message || 'Feedback recorded. Active schedule unchanged.');
+        setTimeout(() => setWorksMessage(''), 5000);
+      }
       await fetchSchedule();
     } catch (err) {
-      setError(errText(err));
+      const msg = errText(err);
+      setError(msg);
+      setNoteError(msg);
     } finally {
       setNoteLoading(false);
     }
@@ -639,16 +707,7 @@ export function Today() {
             {schedule?.is_closed && ' · Closed'}
           </span>
           <h1 className="today-title">Today's Rhythm</h1>
-          <div className="today-summary-pop">
-            <span className="today-summary-chip">{formatDuration(totalStudyMins)} planned study</span>
-            <span className="today-summary-chip">{formatDuration(deepWorkMins)} deep focus</span>
-            {displacedCount > 0 && (
-              <span className="today-summary-chip" style={{ background: 'var(--pop-pink)' }}>
-                {displacedCount} block{displacedCount > 1 ? 's' : ''} reorganised
-              </span>
-            )}
-          </div>
-        </div>
+                  </div>
 
         <div className="today-header-actions">
           <button
@@ -668,6 +727,47 @@ export function Today() {
         <div className="pop-error-banner" role="alert">
           <AlertCircle size={18} strokeWidth={2.5} />
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* Proactive Intervention Banners */}
+      {activeInterventions.length > 0 && (
+        <div className="today-interventions-container">
+          {activeInterventions.map((inv) => (
+            <div
+              key={inv.id}
+              className={`today-intervention-banner ${inv.intervention_type === 'overdue' ? 'overdue' : (inv.intervention_type === 'repeated_unfinished' ? 'repeated-unfinished' : 'approaching')}`}
+              role="status"
+            >
+              <div className="today-intervention-left">
+                <AlertCircle size={20} strokeWidth={2.4} className="today-intervention-icon" />
+                <div className="today-intervention-content">
+                  <div className="today-intervention-title">{inv.title}</div>
+                  <div className="today-intervention-msg">{inv.message}</div>
+                </div>
+              </div>
+              <div className="today-intervention-actions">
+                <button
+                  type="button"
+                  className="today-intervention-btn snooze-btn"
+                  onClick={() => handleSnoozeIntervention(inv.id, 3)}
+                  title="Snooze for 3 hours"
+                >
+                  <Clock size={13} strokeWidth={2} />
+                  <span>Snooze 3h</span>
+                </button>
+                <button
+                  type="button"
+                  className="today-intervention-btn dismiss-btn"
+                  onClick={() => handleDismissIntervention(inv.id)}
+                  title="Dismiss notification"
+                >
+                  <X size={14} strokeWidth={2.5} />
+                  <span>Dismiss</span>
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       )}
 
@@ -1092,17 +1192,51 @@ export function Today() {
             </span>
           </div>
 
-          <div className="changed-list">
-            {(proposal.what_changed || []).map((change, idx) => (
-              <div key={idx} className="changed-list-item">
-                <CheckCircle2 size={18} className="changed-list-icon" strokeWidth={2.2} />
-                <span>{change}</span>
-              </div>
-            ))}
+          <div style={{ fontSize: '13px', color: 'var(--pop-dark)', marginBottom: '8px' }}>
+            Orbit will not change your active schedule until you explicitly approve this proposal.
           </div>
 
-          {proposal.at_risk?.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {/* Concise summary of what will change */}
+          {proposal.what_changed && proposal.what_changed.length > 0 && (
+            <div className="changed-list" style={{ marginBottom: '12px' }}>
+              {proposal.what_changed.map((change, idx) => (
+                <div key={idx} className="changed-list-item">
+                  <CheckCircle2 size={18} className="changed-list-icon" strokeWidth={2.2} />
+                  <span>{change}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Validation violations */}
+          {proposal.violations && proposal.violations.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+              {proposal.violations.map((v, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    backgroundColor: '#FFF1F0',
+                    border: '1px solid #FFA39E',
+                    padding: '10px 14px',
+                    borderRadius: 'var(--pop-radius-sm)',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: '#CF1322',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                  }}
+                >
+                  <AlertCircle size={16} strokeWidth={2.2} />
+                  <span>Violation: {v}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* At-risk tasks */}
+          {proposal.at_risk && proposal.at_risk.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
               {proposal.at_risk.map((item, idx) => (
                 <div
                   key={idx}
@@ -1120,10 +1254,60 @@ export function Today() {
                 >
                   <AlertCircle size={16} strokeWidth={2.2} style={{ color: '#D9381E' }} />
                   <span>
-                    <strong>{item.title}</strong>: {item.reason}
+                    <strong>{item.title}</strong>: {item.minutes_short ? `${item.minutes_short} mins short of deadline` : (item.reason || 'At risk of missing deadline')}
                   </span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Proposed days and actual placements with times */}
+          {proposal.days && proposal.days.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', margin: '10px 0 16px 0' }}>
+              <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--pop-dark)' }}>
+                Proposed Day &amp; Time Placements:
+              </div>
+              {proposal.days
+                .filter((d) => (d.items && d.items.length > 0) || (d.fixed && d.fixed.length > 0))
+                .slice(0, 5)
+                .map((day, dIdx) => (
+                  <div
+                    key={dIdx}
+                    style={{
+                      background: '#FAFAFA',
+                      border: '1px solid #E2E8F0',
+                      borderRadius: '8px',
+                      padding: '10px 14px',
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: '13px', color: 'var(--pop-dark)', marginBottom: '6px' }}>
+                      {day.date}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {(day.fixed || []).map((f, fIdx) => (
+                        <div key={`f-${fIdx}`} style={{ fontSize: '12px', color: '#666', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>🔒 {f.title}</span>
+                          <span>{formatTime(f.start)} – {formatTime(f.end)}</span>
+                        </div>
+                      ))}
+                      {(day.items || []).map((it, iIdx) => (
+                        <div key={`it-${iIdx}`} style={{ fontSize: '12px', color: '#111', display: 'flex', justifyContent: 'space-between' }}>
+                          <span>
+                            <strong>{it.title || 'Task Session'}</strong>
+                            {it.displacement_reason && (
+                              <span style={{ color: '#777', marginLeft: '6px' }}>({it.displacement_reason})</span>
+                            )}
+                          </span>
+                          <span style={{ fontWeight: 600 }}>{formatTime(it.start_time)} – {formatTime(it.end_time)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          ) : (
+            <div style={{ padding: '12px', color: '#666', fontSize: '13px', background: '#F9FAFB', borderRadius: '6px', margin: '10px 0' }}>
+              No proposed placements available in this proposal.
             </div>
           )}
 
@@ -1347,9 +1531,18 @@ export function Today() {
             rows={3}
             placeholder="What worked today, what didn't, or anything Orbit should know about how you work."
             value={noteText}
-            onChange={(e) => setNoteText(e.target.value)}
+            onChange={(e) => {
+              setNoteText(e.target.value);
+              if (noteError) setNoteError('');
+            }}
             disabled={noteLoading || !!confirmCard}
           />
+
+          {noteError && (
+            <div className="pop-error-banner" style={{ margin: '0', fontSize: '13px', padding: '8px 12px' }}>
+              {noteError}
+            </div>
+          )}
 
           {!confirmCard && (
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

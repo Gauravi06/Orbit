@@ -27,6 +27,10 @@ from app.schemas.schedule import (
     ScheduleRejectionResponse,
     ScheduleResponse,
     TextIn,
+    UnclosedCheckResponse,
+    WeekSpreadResponse,
+    ReplanIn,
+    ReplanOut,
 )
 from app.services.gemini_service import GeminiError, parse_disruption, phrase_reasons
 from app.services.rule_engine import (
@@ -38,7 +42,12 @@ from app.services.rule_engine import (
     generate_plan,
     validate_plan,
 )
-from app.api.routes.preferences import load_user_rule_prefs
+from app.api.routes.preferences import (
+    _parse_days_pattern,
+    get_user_preferences_dict,
+    load_user_rule_prefs,
+    refresh_fixed_commitments,
+)
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
@@ -196,6 +205,7 @@ def _load(db: Session, user: User):
                     remaining_minutes=t.estimated_duration,
                     priority=t.priority,
                     deadline=_naive(t.deadline) if t.deadline else None,
+                    must_daily=bool(t.must_daily),
                 )
             )
     return fixed, tasks
@@ -304,16 +314,19 @@ def _save(db: Session, user: User, result, now: datetime, displaced: dict):
 
 
 # ---------------------------------------------------------------- response
-def _response(db: Session, user: User, now: datetime, at_risk=None, violations=None):
+def _response(db: Session, user: User, now: datetime, at_risk=None, violations=None, target_date: Optional[date] = None):
     today = now.date()
+    min_date = min(today, target_date) if target_date else today
+    max_date = max(today + timedelta(days=HORIZON), target_date) if target_date else (today + timedelta(days=HORIZON))
     titles = {t.id: t.title for t in db.query(Task).filter(Task.user_id == user.id).all()}
+    tasks_by_id = {t.id: t for t in db.query(Task).filter(Task.user_id == user.id).all()}
     fixed, _ = _load(db, user)
     scheds = (
         db.query(Schedule)
         .filter(
             Schedule.user_id == user.id,
-            Schedule.date >= today,
-            Schedule.date <= today + timedelta(days=HORIZON),
+            Schedule.date >= min_date,
+            Schedule.date <= max_date,
         )
         .order_by(Schedule.date)
         .all()
@@ -326,6 +339,31 @@ def _response(db: Session, user: User, now: datetime, at_risk=None, violations=N
             .order_by(ScheduleItem.start_time)
             .all()
         )
+        day_items = []
+        for i in items:
+            t = tasks_by_id.get(i.task_id)
+            duration_mins = int((i.end_time - i.start_time).total_seconds() / 60) if i.end_time and i.start_time else 0
+            kind = "deep" if duration_mins >= 45 else "short"
+            tier = "like_to" if (t and t.priority == 1) else ("should_do" if (t and t.priority == 3) else "need_to")
+            is_done = i.status in ("completed", "done")
+            day_items.append(
+                {
+                    "id": i.id,
+                    "task_id": i.task_id,
+                    "title": titles.get(i.task_id),
+                    "start_time": _aware(i.start_time),
+                    "end_time": _aware(i.end_time),
+                    "status": i.status,
+                    "kind": kind,
+                    "tier": tier,
+                    "is_fixed": False,
+                    "done": is_done,
+                    "displaced_by_task_id": i.displaced_by_task_id,
+                    "displaced_by_title": titles.get(i.displaced_by_task_id),
+                    "displacement_reason": i.displacement_reason,
+                    "original_start_time": _aware(i.original_start_time),
+                }
+            )
         days.append(
             {
                 "schedule_id": s.id,
@@ -336,21 +374,7 @@ def _response(db: Session, user: User, now: datetime, at_risk=None, violations=N
                     for b in fixed
                     if b.start.date() == s.date
                 ],
-                "items": [
-                    {
-                        "id": i.id,
-                        "task_id": i.task_id,
-                        "title": titles.get(i.task_id),
-                        "start_time": _aware(i.start_time),
-                        "end_time": _aware(i.end_time),
-                        "status": i.status,
-                        "displaced_by_task_id": i.displaced_by_task_id,
-                        "displaced_by_title": titles.get(i.displaced_by_task_id),
-                        "displacement_reason": i.displacement_reason,
-                        "original_start_time": _aware(i.original_start_time),
-                    }
-                    for i in items
-                ],
+                "items": day_items,
             }
         )
     return {"days": days, "at_risk": at_risk or [], "violations": violations or []}
@@ -445,6 +469,10 @@ def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str 
     problems = validate_plan(
         result.placements, {t.id: t for t in tasks}, fixed + blocks, prefs, now
     )
+    if problems:
+        # Do not persist invalid schedule placements
+        return _response(db, user, now, _at_risk(result, tasks), violations=problems)
+
     _save(db, user, result, now, displaced)
     return _response(db, user, now, _at_risk(result, tasks), problems)
 
@@ -452,10 +480,17 @@ def _apply_disruption(db: Session, user: User, payload: DisruptionIn, text: str 
 # ---------------------------------------------------------------- routes
 @router.get("", response_model=ScheduleResponse)
 def get_schedule(
+    date: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return _response(db, current_user, _now())
+    target_d = None
+    if date:
+        try:
+            target_d = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            target_d = None
+    return _response(db, current_user, _now(), target_date=target_d)
 
 
 @router.post("/generate", response_model=ScheduleResponse)
@@ -464,13 +499,29 @@ def generate(
     current_user: User = Depends(get_current_user),
 ):
     now = _now()
+
+    # Refresh fixed commitments before loading scheduler inputs.
+    # Pass the same planning timestamp used by the scheduler.
+    refresh_fixed_commitments(db, current_user, now)
+
     prefs = load_user_rule_prefs(db, current_user)
     fixed, tasks = _load(db, current_user)
-    result = generate_plan(tasks, fixed, prefs, now, HORIZON)
-    problems = validate_plan(result.placements, {t.id: t for t in tasks}, fixed, prefs, now)
-    _save(db, current_user, result, now, {})
-    return _response(db, current_user, now, _at_risk(result, tasks), problems)
 
+    result = generate_plan(tasks, fixed, prefs, now, HORIZON)
+    problems = validate_plan(
+        result.placements,
+        {t.id: t for t in tasks},
+        fixed,
+        prefs,
+        now,
+    )
+
+    if problems:
+        # Do not persist invalid schedule placements
+        return _response(db, current_user, now, _at_risk(result, tasks), violations=problems)
+
+    _save(db, current_user, result, now, {})
+    return _response(db, current_user, now, _at_risk(result, tasks), [])
 
 @router.post("/disrupt", response_model=ScheduleResponse)
 def disrupt(
@@ -521,14 +572,22 @@ def propose_schedule(
     caps: Dict[date, int] = {}
     text = ""
     if payload:
-        if payload.text:
-            text = payload.text
+        if payload.date:
             try:
-                parsed_blocks, parsed_caps = parse_disruption(payload.text, now)
+                target_d = datetime.strptime(payload.date, "%Y-%m-%d").date()
+                if target_d > now.date():
+                    now = datetime.combine(target_d, prefs.wake)
+            except ValueError:
+                pass
+        candidate_text = f"{payload.text or ''} {payload.selected_option or ''}".strip()
+        if candidate_text:
+            text = candidate_text
+            try:
+                parsed_blocks, parsed_caps = parse_disruption(text, now)
                 blocks.extend([FixedBlock(b["label"], _naive(b["start"]), _naive(b["end"]), 0) for b in parsed_blocks])
                 for c in parsed_caps:
                     caps[c["day"]] = c["max_minutes"]
-            except GeminiError:
+            except Exception:
                 pass
         if payload.blocks:
             blocks.extend([FixedBlock(b.label, _naive(b.start), _naive(b.end), 0) for b in payload.blocks])
@@ -553,12 +612,32 @@ def propose_schedule(
         .all()
     ]
     displaced = _diff(before, result.placements, blocks)
+    what_changed: List[str] = []
     if text and displaced:
         keys = list(displaced)
         phrased = phrase_reasons([displaced[k][1] for k in keys], text)
         for k, r in zip(keys, phrased):
             by, _, old_s = displaced[k]
             displaced[k] = (by, r, old_s)
+            if r and r not in what_changed:
+                what_changed.append(r)
+    elif displaced:
+        for (_, reason, _) in displaced.values():
+            if reason and reason not in what_changed:
+                what_changed.append(reason)
+
+    for b in blocks:
+        desc = f"Adjusted schedule for '{b.title}' ({b.start.strftime('%H:%M')}–{b.end.strftime('%H:%M')})."
+        if desc not in what_changed:
+            what_changed.append(desc)
+
+    for c_day, max_m in caps.items():
+        desc = f"Lightened schedule for {c_day.strftime('%a, %b %d') if hasattr(c_day, 'strftime') else c_day} to protect recovery time."
+        if desc not in what_changed:
+            what_changed.insert(0, desc)
+
+    if not what_changed:
+        what_changed.append(f"Proposed schedule with {len(result.placements)} focus sessions across {horizon} days.")
 
     at_risk_list = _at_risk(result, tasks)
     summary = f"Proposed plan with {len(result.placements)} sessions across {horizon} days."
@@ -592,6 +671,7 @@ def propose_schedule(
         "created_at": proposal.created_at,
         "expires_at": proposal.expires_at,
         "summary": proposal.summary,
+        "what_changed": what_changed,
         "days": days_data,
         "at_risk": at_risk_list,
         "violations": problems,
@@ -642,12 +722,20 @@ def get_proposal(
     titles = {str(t.id): t.title for t in db.query(Task).filter(Task.user_id == current_user.id).all()}
     days_data = _format_placements_days(proposal.planning_now, HORIZON, placements, fixed, titles, displaced)
 
+    what_changed: List[str] = []
+    for (_, reason, _) in displaced.values():
+        if reason and reason not in what_changed:
+            what_changed.append(reason)
+    if not what_changed and proposal.summary:
+        what_changed.append(proposal.summary)
+
     return {
         "proposal_id": proposal.id,
         "status": proposal.status,
         "created_at": proposal.created_at,
         "expires_at": proposal.expires_at,
         "summary": proposal.summary or "",
+        "what_changed": what_changed,
         "days": days_data,
         "at_risk": json.loads(proposal.at_risk_json),
         "violations": json.loads(proposal.violations_json),
@@ -772,3 +860,352 @@ def reject_proposal(
         "proposal_id": proposal.id,
         "status": "rejected",
     }
+
+
+# ---------------------------------------------------------------- week & unclosed endpoints
+@router.get("/unclosed-check", response_model=Optional[UnclosedCheckResponse])
+def check_unclosed_past_day(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = _now()
+    yesterday = now.date() - timedelta(days=1)
+    yest_str = yesterday.isoformat()
+
+    sched = (
+        db.query(Schedule)
+        .filter(Schedule.user_id == current_user.id, Schedule.date == yesterday)
+        .first()
+    )
+    if sched is not None and getattr(sched, "is_closed", False):
+        return None
+    elif sched is not None and getattr(sched, "is_closed", None) is False:
+        weekday_name = yesterday.strftime("%A")
+        return {"unclosedDate": yest_str, "weekday": weekday_name}
+    return None
+
+
+@router.get("/week", response_model=WeekSpreadResponse)
+def get_week_spread(
+    date: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now_dt = _now()
+    if date:
+        try:
+            base_date = datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            base_date = now_dt.date()
+    else:
+        base_date = now_dt.date()
+
+    # Calculate Monday of base_date's week (weekday(): 0=Monday, 6=Sunday)
+    weekday_idx = base_date.weekday()
+    monday = base_date - timedelta(days=weekday_idx)
+
+    week_dates = [monday + timedelta(days=i) for i in range(7)]
+    scheds = (
+        db.query(Schedule)
+        .filter(
+            Schedule.user_id == current_user.id,
+            Schedule.date >= week_dates[0],
+            Schedule.date <= week_dates[-1],
+        )
+        .all()
+    )
+    sched_map = {s.date: s for s in scheds}
+
+    # Load tasks and fixed commitments
+    titles = {t.id: t.title for t in db.query(Task).filter(Task.user_id == current_user.id).all()}
+    tasks_by_id = {t.id: t for t in db.query(Task).filter(Task.user_id == current_user.id).all()}
+    fixed, _ = _load(db, current_user)
+    prefs_dict = get_user_preferences_dict(db, current_user)
+
+    days_data = []
+    total_deep_mins = 0
+    total_rest_mins = 0
+    total_hobby_mins = 0
+
+    for d in week_dates:
+        s = sched_map.get(d)
+        is_closed = bool(getattr(s, "is_closed", False)) if s else False
+        day_items = []
+
+        # Add fixed blocks for this day from loaded constraints
+        existing_fixed_keys = set()
+        seen_fixed_titles = set()
+        for b in fixed:
+            if b.start.date() == d:
+                existing_fixed_keys.add((b.title.lower(), b.start.hour, b.start.minute))
+                seen_fixed_titles.add(b.title.lower())
+                day_items.append({
+                    "id": None,
+                    "title": b.title,
+                    "start_time": _aware(b.start).isoformat(),
+                    "end_time": _aware(b.end).isoformat(),
+                    "is_fixed": True,
+                    "kind": "fixed",
+                    "status": "scheduled",
+                    "done": False,
+                })
+
+        # Also expand fixed commitments from user preferences for this weekday
+        # (ensures past days or newly loaded days in the week display their recurring anchors)
+        for fc in (prefs_dict.get("fixed_commitments") or []):
+            if not isinstance(fc, dict):
+                continue
+            fc_name = (fc.get("name") or fc.get("title") or "").strip()
+            if not fc_name or fc_name.lower() in seen_fixed_titles:
+                continue
+            weekdays = _parse_days_pattern(str(fc.get("days") or ""))
+            if d.weekday() not in weekdays:
+                continue
+            start_str = (fc.get("start_time") or "").strip()
+            end_str = (fc.get("end_time") or "").strip()
+            try:
+                sh, sm = map(int, start_str.split(":"))
+                eh, em = map(int, end_str.split(":"))
+                if (fc_name.lower(), sh, sm) not in existing_fixed_keys:
+                    existing_fixed_keys.add((fc_name.lower(), sh, sm))
+                    seen_fixed_titles.add(fc_name.lower())
+                    start_dt = datetime(d.year, d.month, d.day, sh, sm, 0)
+                    end_dt = datetime(d.year, d.month, d.day, eh, em, 0)
+                    if end_dt <= start_dt:
+                        end_dt += timedelta(days=1)
+                    day_items.append({
+                        "id": None,
+                        "title": fc_name,
+                        "start_time": _aware(start_dt).isoformat(),
+                        "end_time": _aware(end_dt).isoformat(),
+                        "is_fixed": True,
+                        "kind": "fixed",
+                        "status": "scheduled",
+                        "done": False,
+                    })
+            except Exception:
+                continue
+
+        # Build day fixed blocks for conflict checking
+        day_fixed_blocks = [b for b in fixed if b.start.date() == d]
+        task_based_keys = {(b.title.lower(), b.start.hour, b.start.minute) for b in day_fixed_blocks}
+        for fc in (prefs_dict.get("fixed_commitments") or []):
+            if not isinstance(fc, dict):
+                continue
+            fc_name = (fc.get("name") or fc.get("title") or "").strip()
+            if not fc_name:
+                continue
+            weekdays = _parse_days_pattern(str(fc.get("days") or ""))
+            if d.weekday() not in weekdays:
+                continue
+            start_str = (fc.get("start_time") or "").strip()
+            end_str = (fc.get("end_time") or "").strip()
+            try:
+                sh, sm = map(int, start_str.split(":"))
+                eh, em = map(int, end_str.split(":"))
+                if (fc_name.lower(), sh, sm) in task_based_keys:
+                    continue
+                start_dt = datetime(d.year, d.month, d.day, sh, sm, 0)
+                end_dt = datetime(d.year, d.month, d.day, eh, em, 0)
+                if end_dt <= start_dt:
+                    end_dt += timedelta(days=1)
+                commute = max(
+                    int(fc.get("commute_before") or 0),
+                    int(fc.get("commute_after") or 0),
+                )
+                day_fixed_blocks.append(FixedBlock(fc_name, start_dt, end_dt, commute))
+            except Exception:
+                continue
+
+        # Add scheduled task items (omitting items that conflict with fixed commitments)
+        if s:
+            db_items = (
+                db.query(ScheduleItem)
+                .filter(ScheduleItem.schedule_id == s.id)
+                .order_by(ScheduleItem.start_time)
+                .all()
+            )
+            for it in db_items:
+                it_s = _naive(it.start_time)
+                it_e = _naive(it.end_time)
+                # Check collision with fixed commitments and their commute/transition buffers
+                has_collision = False
+                for fb in day_fixed_blocks:
+                    pad = timedelta(minutes=fb.commute_minutes) + TRANSITION_BUFFER
+                    if it_s < fb.end + pad and it_e > fb.start - pad:
+                        has_collision = True
+                        break
+                if has_collision:
+                    continue
+
+                t = tasks_by_id.get(it.task_id)
+                item_title = titles.get(it.task_id) or "Study"
+                duration_mins = int((it.end_time - it.start_time).total_seconds() / 60) if it.end_time and it.start_time else 0
+                kind = "deep" if duration_mins >= 45 else "short"
+                tier = "like_to" if (t and t.priority == 1) else ("should_do" if (t and t.priority == 3) else "need_to")
+                is_done = it.status in ("completed", "done")
+
+                day_items.append({
+                    "id": str(it.id),
+                    "task_id": str(it.task_id) if it.task_id else None,
+                    "title": item_title,
+                    "start_time": _aware(it.start_time).isoformat(),
+                    "end_time": _aware(it.end_time).isoformat(),
+                    "is_fixed": False,
+                    "kind": kind,
+                    "tier": tier,
+                    "status": it.status or "scheduled",
+                    "done": is_done,
+                    "displacement_reason": it.displacement_reason,
+                })
+
+                if is_closed:
+                    if kind == "deep":
+                        total_deep_mins += duration_mins
+                    if tier == "like_to":
+                        total_hobby_mins += duration_mins
+
+        day_items.sort(key=lambda x: x["start_time"])
+
+        days_data.append({
+            "date": d.isoformat(),
+            "weekday": d.strftime("%a"),
+            "fullWeekday": d.strftime("%A"),
+            "is_closed": is_closed,
+            "items": day_items,
+        })
+
+    # Group definitions from preferences or tasks
+    user_items = [
+        *(prefs_dict.get("need_to_items") or []),
+        *(prefs_dict.get("should_do_items") or []),
+        *(prefs_dict.get("like_to_items") or []),
+    ]
+
+    group_definitions = []
+    for item in user_items[:4]:
+        title = item if isinstance(item, str) else (item.get("name") or item.get("title") or "")
+        if title:
+            group_definitions.append({
+                "title": title,
+                "test": lambda i, t=title.lower(): bool(i.get("title") and t in i["title"].lower()),
+            })
+
+    if not group_definitions:
+        distinct_titles = set()
+        for d in days_data:
+            for it in d["items"]:
+                if not it.get("is_fixed") and it.get("title"):
+                    distinct_titles.add(it["title"])
+        for title in list(distinct_titles)[:4]:
+            group_definitions.append({
+                "title": title,
+                "test": lambda i, t=title.lower(): bool(i.get("title") and i["title"].lower() == t),
+            })
+
+    if not group_definitions:
+        group_definitions = [
+            {"title": "Focus Sessions", "test": lambda i: i.get("kind") == "deep"},
+            {"title": "Protected Free Time", "test": lambda i: i.get("tier") == "like_to"},
+        ]
+
+    groups = []
+    for g in group_definitions:
+        completed_sessions = 0
+        circles = []
+        for day in days_data:
+            if not day["is_closed"]:
+                circles.append("unclosed")
+                continue
+            matching_item = next((it for it in day["items"] if g["test"](it)), None)
+            if not matching_item:
+                circles.append("none")
+            elif matching_item.get("done"):
+                completed_sessions += 1
+                circles.append("done")
+            else:
+                circles.append("moved")
+
+        groups.append({
+            "title": g["title"],
+            "circles": circles,
+            "sentence": f"{g['title']}: {completed_sessions} session{'s' if completed_sessions != 1 else ''} completed on closed days.",
+            "completedSessions": completed_sessions,
+        })
+
+    deep_work_hours = f"{total_deep_mins / 60:.1f}"
+    rest_hours = f"{total_rest_mins / 60:.1f}"
+    hobby_hours = f"{total_hobby_mins / 60:.1f}"
+    target_hobby_hours = f"{(prefs_dict.get('protected_hobby_mins_week') or 120) / 60:.1f}"
+
+    notice_paragraph = (
+        "Orbit noticed you preserved solid focus blocks during your day without cutting into sleep. Your personal buffer and protected time stayed intact."
+        if float(deep_work_hours) >= 4.0
+        else "Orbit noticed your rhythms leaned toward shorter, adaptive blocks this week to keep energy sustainable while commitments shifted."
+    )
+    suggestion = (
+        "Next week, consider adding an extra 15-minute decompression cushion after long commitments to keep your evenings calm."
+        if float(deep_work_hours) >= 6.0
+        else "Next week, we can protect one uninterrupted 90-minute morning window before midday commitments."
+    )
+
+    return {
+        "days": days_data,
+        "groups": groups,
+        "deepWorkHours": deep_work_hours,
+        "restHours": rest_hours,
+        "hobbyHours": hobby_hours,
+        "targetHobbyHours": target_hobby_hours,
+        "noticeParagraph": notice_paragraph,
+        "suggestion": suggestion,
+    }
+
+
+@router.post("/replan", response_model=ReplanOut)
+def replan_schedule(
+    payload: ReplanIn,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    now = _now()
+    combined_text = f"{payload.feedbackText or ''} {payload.clarification or ''} {payload.reason or ''}".strip()
+    lower_text = combined_text.lower()
+
+    # Determine whether this feedback is asking for a schedule change
+    is_schedule_change_request = any(
+        k in lower_text
+        for k in [
+            "exhaust", "tired", "drained", "burnout", "sick", "too much", "heavy",
+            "overwhelm", "plate", "reschedule", "move", "shift", "cancel", "wrong time"
+        ]
+    )
+
+    if not is_schedule_change_request:
+        return ReplanOut(
+            success=True,
+            what_changed=[],
+            proposal=None,
+            message="Feedback recorded. Orbit will factor this into upcoming schedules without changing your active schedule.",
+        )
+
+    # For schedule-change requests: create a reviewable proposal WITHOUT mutating active schedule!
+    caps = []
+    blocks = []
+    if any(k in lower_text for k in ["exhaust", "tired", "drained", "burnout", "sick", "too much", "heavy", "overwhelm", "plate"]):
+        # Lighten today: cap remaining daily study minutes for today
+        caps.append(CapIn(day=now.date(), max_minutes=60))
+
+    prop_in = ProposalCreateIn(
+        text=combined_text,
+        caps=caps,
+        blocks=blocks,
+    )
+    prop_data = propose_schedule(prop_in, db, current_user)
+    proposal_resp = ScheduleProposalResponse(**prop_data)
+
+    return ReplanOut(
+        success=True,
+        what_changed=proposal_resp.what_changed,
+        proposal=proposal_resp,
+        message="Proposed schedule adjustment created. Review and approve below to apply it.",
+    )

@@ -313,6 +313,263 @@ class TestSchedulerIntegration(unittest.TestCase):
         self.assertEqual({i["title"] for i in self._items(res_a.json())}, {"Alice Big Task"})
         self.assertEqual({i["title"] for i in self._items(res_b.json())}, {"Bob Big Task"})
 
+    def test_unclosed_check_endpoint(self):
+        """GET /schedules/unclosed-check returns 200 with None/null when no unclosed days exist."""
+        res = self.client.get("/schedules/unclosed-check", headers=self.headers_a)
+        self.assertEqual(res.status_code, 200)
+        self.assertIsNone(res.json())
+
+    def test_week_spread_endpoint(self):
+        """GET /schedules/week returns full 7-day spread with calculated stats and groups."""
+        task_a = Task(
+            id=uuid.uuid4(),
+            user_id=self.user_a.id,
+            title="Alice Deep Study",
+            estimated_duration=90,
+            priority=5,
+            task_type=TaskType.growth,
+        )
+        self.db.add(task_a)
+        self.db.commit()
+
+        # Generate schedule for Alice
+        gen_res = self.client.post("/schedules/generate", headers=self.headers_a)
+        self.assertEqual(gen_res.status_code, 200)
+
+        # Call /schedules/week
+        res = self.client.get("/schedules/week", headers=self.headers_a)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        self.assertIn("days", data)
+        self.assertEqual(len(data["days"]), 7)
+        self.assertIn("groups", data)
+        self.assertIn("deepWorkHours", data)
+        self.assertIn("restHours", data)
+        self.assertIn("hobbyHours", data)
+        self.assertIn("targetHobbyHours", data)
+        self.assertIn("noticeParagraph", data)
+        self.assertIn("suggestion", data)
+
+        # Confirm scheduled items are present in the days
+        all_titles = [it["title"] for d in data["days"] for it in d["items"]]
+        self.assertIn("Alice Deep Study", all_titles)
+
+    def test_disruption_validation_failure_does_not_persist_or_overwrite_schedule(self):
+        """
+        Priority 2 verification:
+        When a disruption produces validation violations (e.g. invalid placements),
+        the shared helper returns violations without saving to the DB.
+        The existing active schedule in database rows remains completely unchanged.
+        """
+        # Create an existing scheduled item for user_a
+        sched = Schedule(
+            id=uuid.uuid4(),
+            user_id=self.user_a.id,
+            date=FIXED_DAY,
+            version=1,
+        )
+        self.db.add(sched)
+        self.db.commit()
+
+        initial_item = ScheduleItem(
+            id=uuid.uuid4(),
+            schedule_id=sched.id,
+            task_id=uuid.uuid4(),
+            start_time=datetime(2026, 10, 11, 7, 0, tzinfo=IST),
+            end_time=datetime(2026, 10, 11, 8, 30, tzinfo=IST),
+            status="scheduled",
+        )
+        self.db.add(initial_item)
+        self.db.commit()
+
+        # Capture database rows before disruption
+        initial_db_items = self.db.query(ScheduleItem).filter(ScheduleItem.schedule_id == sched.id).all()
+        self.assertEqual(len(initial_db_items), 1)
+        initial_item_id = initial_db_items[0].id
+        initial_start = initial_db_items[0].start_time
+
+        # Mock validate_plan to return a violation during disruption
+        with _fixed_now(), patch("app.api.routes.schedules.validate_plan", return_value=["Simulated violation: impossible placement"]):
+            disrupt_payload = {
+                "blocks": [
+                    {
+                        "label": "Emergency Meeting",
+                        "start": "2026-10-11T07:00:00",
+                        "end": "2026-10-11T08:00:00",
+                    }
+                ],
+                "caps": [],
+            }
+            res = self.client.post("/schedules/disrupt", json=disrupt_payload, headers=self.headers_a)
+
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertIn("violations", data)
+        self.assertEqual(data["violations"], ["Simulated violation: impossible placement"])
+
+        # VERIFY DATABASE ROWS: The active schedule item must remain completely untouched in DB
+        db_items_after = self.db.query(ScheduleItem).filter(ScheduleItem.schedule_id == sched.id).all()
+        self.assertEqual(len(db_items_after), 1)
+        self.assertEqual(db_items_after[0].id, initial_item_id)
+        self.assertEqual(db_items_after[0].start_time, initial_start)
+
+    def test_end_to_end_connected_scheduling_journey(self):
+        """
+        Verify the connected, authenticated, non-mock backend journey:
+        1. Save onboarding preferences and fixed commitments.
+        2. Generate a schedule that demonstrably respects those saved values.
+        3. Create a schedule-change proposal for a new task.
+        4. Verify proposal creation leaves the active schedule unchanged.
+        5. Explicitly approve the proposal.
+        6. Verify the change persists in the database and is returned correctly after fetching the schedule again.
+        Plus all safety checks:
+        - Fixed commitments remain intact before and after approval.
+        - Unapproved/rejected proposal does not mutate the active schedule.
+        - Duplicate approval attempt is rejected and does not duplicate schedule items.
+        - User isolation: User B cannot access User A's tasks, schedules, or proposals.
+        """
+        # --- Step 1: Save onboarding preferences and fixed commitments ---
+        onboarding_data = {
+            "wake_time": "06:00",
+            "sleep_time": "22:00",
+            "focus_duration": 60,
+            "daily_cap_minutes": 360,
+            "fixed_commitments": [
+                {
+                    "id": "morning-lecture",
+                    "name": "Chemistry Lecture",
+                    "days": "Sunday",  # 2026-10-11 is a Sunday
+                    "start_time": "09:00",
+                    "end_time": "11:00",
+                    "commute_before": 15,
+                    "commute_after": 15,
+                }
+            ],
+            "need_to_items": [
+                {"title": "Initial Chemistry Assignment", "estimated_duration": 90, "priority": 4}
+            ],
+            "should_do_items": [],
+            "like_to_items": [],
+        }
+
+        with _fixed_now():
+            res_onboard = self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+        self.assertEqual(res_onboard.status_code, 200, res_onboard.text)
+        self.assertEqual(res_onboard.json()["wake_time"], "06:00")
+        self.assertEqual(res_onboard.json()["sleep_time"], "22:00")
+
+        # --- Step 2: Generate schedule and verify it respects fixed commitments and preferences ---
+        with _fixed_now():
+            res_gen = self.client.post("/schedules/generate", headers=self.headers_a)
+        self.assertEqual(res_gen.status_code, 200, res_gen.text)
+        gen_data = res_gen.json()
+
+        # Day 0 is 2026-10-11 (Sunday)
+        day0 = gen_data["days"][0]
+        self.assertEqual(str(day0["date"]), "2026-10-11")
+        self.assertEqual(len(day0["fixed"]), 1)
+        self.assertEqual(day0["fixed"][0]["title"], "Chemistry Lecture")
+
+        # Chemistry lecture is 09:00-11:00 with 15min commute before/after: protected window is 08:45-11:15
+        chem_items = [i for i in day0["items"] if i["title"] == "Initial Chemistry Assignment"]
+        self.assertTrue(chem_items, "Initial task must be scheduled on day 0")
+        for item in chem_items:
+            s_time = datetime.fromisoformat(item["start_time"])
+            e_time = datetime.fromisoformat(item["end_time"])
+            # Ensure placement does not overlap 08:45-11:15
+            p_start = datetime(2026, 10, 11, 8, 45, tzinfo=IST)
+            p_end = datetime(2026, 10, 11, 11, 15, tzinfo=IST)
+            self.assertFalse(s_time < p_end and e_time > p_start, f"Task overlaps fixed commitment: {item}")
+            # Ensure within wake/sleep (06:00 - 22:00)
+            self.assertGreaterEqual(s_time.time(), time(6, 0))
+            self.assertLessEqual(e_time.time(), time(22, 0))
+
+        # Snapshot active schedule item IDs and count before proposal
+        active_items_before = self.db.query(ScheduleItem).join(Schedule).filter(Schedule.user_id == self.user_a.id).all()
+        active_ids_before = {item.id for item in active_items_before}
+        self.assertGreater(len(active_ids_before), 0)
+
+        # --- Step 3: Create a new task and generate a schedule-change proposal ---
+        new_task_payload = {
+            "title": "Urgent Math Lab",
+            "estimated_duration": 60,
+            "priority": 5,
+            "task_type": "growth",
+        }
+        res_task = self.client.post("/tasks", json=new_task_payload, headers=self.headers_a)
+        self.assertEqual(res_task.status_code, 201, res_task.text)
+        new_task_id = res_task.json()["id"]
+
+        with _fixed_now():
+            res_prop = self.client.post("/schedules/propose", headers=self.headers_a)
+        self.assertEqual(res_prop.status_code, 200, res_prop.text)
+        prop_data = res_prop.json()
+        prop_id = prop_data["proposal_id"]
+        self.assertEqual(prop_data["status"], "pending")
+
+        # Confirm new task is proposed in the proposal placements
+        prop_math_items = [i for d in prop_data["days"] for i in d["items"] if i["title"] == "Urgent Math Lab"]
+        self.assertTrue(prop_math_items, "Urgent Math Lab should be planned in the proposal")
+
+        # --- Step 4: Verify proposal creation leaves the active schedule completely unchanged ---
+        active_items_after_prop = self.db.query(ScheduleItem).join(Schedule).filter(Schedule.user_id == self.user_a.id).all()
+        active_ids_after_prop = {item.id for item in active_items_after_prop}
+        self.assertEqual(active_ids_before, active_ids_after_prop, "Proposing must not alter active schedule items")
+
+        # Schedule GET also returns exactly the prior state without Urgent Math Lab
+        with _fixed_now():
+            res_sched_check = self.client.get("/schedules", headers=self.headers_a)
+        active_titles = [i["title"] for d in res_sched_check.json()["days"] for i in d["items"]]
+        self.assertNotIn("Urgent Math Lab", active_titles, "Proposed task must NOT be active before approval")
+
+        # --- Safety check: User Isolation ---
+        # User B cannot see User A's task, schedule, or proposal
+        res_b_task = self.client.get(f"/tasks/{new_task_id}", headers=self.headers_b)
+        self.assertEqual(res_b_task.status_code, 404)
+
+        res_b_prop = self.client.get(f"/schedules/proposals/{prop_id}", headers=self.headers_b)
+        self.assertEqual(res_b_prop.status_code, 404)
+
+        res_b_app = self.client.post(f"/schedules/proposals/{prop_id}/approve", headers=self.headers_b)
+        self.assertEqual(res_b_app.status_code, 404)
+
+        with _fixed_now():
+            res_b_sched = self.client.get("/schedules", headers=self.headers_b)
+        b_titles = [i["title"] for d in res_b_sched.json()["days"] for i in d["items"]]
+        self.assertNotIn("Urgent Math Lab", b_titles)
+        self.assertNotIn("Initial Chemistry Assignment", b_titles)
+
+        # --- Step 5: Explicitly approve the proposal ---
+        with _fixed_now():
+            res_app = self.client.post(f"/schedules/proposals/{prop_id}/approve", headers=self.headers_a)
+        self.assertEqual(res_app.status_code, 200, res_app.text)
+        self.assertEqual(res_app.json()["status"], "approved")
+
+        # --- Step 6: Verify change persists and returns correctly after fetching schedule again ---
+        with _fixed_now():
+            res_sched_final = self.client.get("/schedules", headers=self.headers_a)
+        self.assertEqual(res_sched_final.status_code, 200)
+        final_days = res_sched_final.json()["days"]
+
+        # Confirm Urgent Math Lab is now actively scheduled
+        final_math_items = [i for d in final_days for i in d["items"] if i["title"] == "Urgent Math Lab"]
+        self.assertTrue(final_math_items, "Urgent Math Lab must be present in active schedule after approval")
+
+        # Confirm fixed commitments remain intact
+        day0_final = final_days[0]
+        self.assertEqual(len(day0_final["fixed"]), 1)
+        self.assertEqual(day0_final["fixed"][0]["title"], "Chemistry Lecture")
+
+        # Confirm no double placements or duplicate IDs exist
+        all_final_item_ids = [i["id"] for d in final_days for i in d["items"]]
+        self.assertEqual(len(all_final_item_ids), len(set(all_final_item_ids)), "No duplicate schedule item IDs allowed")
+
+        # Safety check: Cannot approve the same proposal a second time (idempotency guard)
+        res_app_again = self.client.post(f"/schedules/proposals/{prop_id}/approve", headers=self.headers_a)
+        self.assertEqual(res_app_again.status_code, 400)
+        self.assertIn("already approved", res_app_again.json()["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

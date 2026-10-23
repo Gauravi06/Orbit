@@ -23,7 +23,10 @@ class PreferencesBase(BaseModel):
     @classmethod
     def validate_time_format(cls, v: Optional[str]) -> Optional[str]:
         if v is not None:
-            parts = v.strip().split(":")
+            v_str = str(v).strip()
+            if v_str.lower() in ("no_pref", "none", "", "no preference"):
+                return "no_pref"
+            parts = v_str.split(":")
             if len(parts) != 2:
                 raise ValueError("Time must be in HH:MM format")
             try:

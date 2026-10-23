@@ -26,6 +26,8 @@ class TextIn(BaseModel):
 
 class ProposalCreateIn(BaseModel):
     text: Optional[str] = None
+    date: Optional[str] = None
+    selected_option: Optional[str] = None
     blocks: List[BlockIn] = []
     caps: List[CapIn] = []
 
@@ -39,6 +41,10 @@ class ScheduleItemRead(BaseModel):
     start_time: datetime
     end_time: datetime
     status: Optional[str] = "scheduled"
+    kind: Optional[str] = "deep"
+    tier: Optional[str] = "need_to"
+    is_fixed: Optional[bool] = False
+    done: Optional[bool] = False
     displaced_by_task_id: Optional[uuid.UUID] = None
     displaced_by_title: Optional[str] = None
     displacement_reason: Optional[str] = None
@@ -66,6 +72,7 @@ class ScheduleProposalResponse(BaseModel):
     created_at: datetime
     expires_at: Optional[datetime] = None
     summary: str
+    what_changed: List[str] = []
     days: List[ScheduleDayRead]
     at_risk: List[Dict[str, Any]] = []
     violations: List[str] = []
@@ -90,3 +97,40 @@ class ScheduleRejectionResponse(BaseModel):
     message: str
     proposal_id: uuid.UUID
     status: str
+
+
+class UnclosedCheckResponse(BaseModel):
+    unclosedDate: str
+    weekday: str
+
+
+class WeekDayInfo(BaseModel):
+    date: str
+    weekday: str
+    fullWeekday: str
+    is_closed: bool = False
+    items: List[Dict[str, Any]] = []
+
+
+class WeekSpreadResponse(BaseModel):
+    days: List[WeekDayInfo]
+    groups: List[Dict[str, Any]] = []
+    deepWorkHours: str = "0.0"
+    restHours: str = "0.0"
+    hobbyHours: str = "0.0"
+    targetHobbyHours: str = "2.0"
+    noticeParagraph: str = ""
+    suggestion: str = ""
+
+
+class ReplanIn(BaseModel):
+    reason: Optional[str] = None
+    feedbackText: Optional[str] = None
+    clarification: Optional[str] = None
+
+
+class ReplanOut(BaseModel):
+    success: bool
+    what_changed: List[str] = []
+    proposal: Optional[ScheduleProposalResponse] = None
+    message: Optional[str] = None

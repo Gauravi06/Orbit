@@ -92,37 +92,45 @@ export function Tasks() {
     try {
       const parsed = parseTaskSemantics(nlText.trim());
       const duration = parsed?.estimated_duration || 60;
+      const tier = parsed?.tier || 'have_to';
+      const priority = parsed?.priority || (tier === 'have_to' ? 5 : tier === 'need_to' ? 3 : 1);
 
-      // Extract title from input
-      let title = nlText.trim();
-      const parts = nlText.split(/[,;\-–\n]/);
-      if (parts.length > 1 && parts[0].trim().length > 1) {
-        title = parts[0].trim();
+      // Extract title from semantic parser, falling back to split-character heuristic
+      let title = parsed?.clean_title || parsed?.title || '';
+      if (!title) {
+        const parts = nlText.split(/[,;\-–\n]/);
+        if (parts.length > 1 && parts[0].trim().length > 1) {
+          title = parts[0].trim();
+        } else {
+          title = nlText.trim();
+        }
       }
 
-      // Check if deadline date string was mentioned or default to upcoming Friday
+      // Check if deadline date string was mentioned or default to upcoming Friday 23:59 local time
       let deadline = null;
       if (parsed?.deadline) {
         deadline = parsed.deadline;
       } else {
-        // If the text mentions "due" or "by", find next occurrence or default to Friday 23:59
+        // Default to upcoming Friday 23:59:00
         const d = new Date();
         const day = d.getDay();
         const diff = (5 - day + 7) % 7 || 7;
         const due = new Date(d);
         due.setDate(d.getDate() + diff);
-        due.setHours(23, 59, 0, 0);
-        deadline = due.toISOString().slice(0, 16);
+        const y = due.getFullYear();
+        const m = String(due.getMonth() + 1).padStart(2, '0');
+        const dt = String(due.getDate()).padStart(2, '0');
+        deadline = `${y}-${m}-${dt}T23:59:00`;
       }
 
       const payload = {
         title,
-        tier: 'have_to',
-        priority: 5,
+        tier,
+        priority,
         estimated_duration: duration,
         duration,
-        frequency: 'One-time',
-        task_type: 'deadline',
+        frequency: parsed?.frequency || 'One-time',
+        task_type: parsed?.task_type || 'deadline',
         deadline,
         natural_language_note: nlText.trim(),
         semantic_preferences: parsed && !parsed.isEmpty ? parsed : null,
@@ -130,7 +138,8 @@ export function Tasks() {
       };
 
       await createTask(payload);
-      setMessage(`Added "${title}" (Need To, due ${new Date(deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}).`);
+      const tierLabel = tier === 'have_to' ? 'Need To' : tier === 'need_to' ? 'Should Do' : 'Like To';
+      setMessage(`Added "${title}" (${tierLabel}, due ${new Date(deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}).`);
       setNlText('');
       await loadTasksData();
     } catch (err) {

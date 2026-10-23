@@ -35,14 +35,7 @@ http.interceptors.response.use(
 );
 
 /* ---------- Error text helper ---------- */
-export function errText(e) {
-  const d = e?.response?.data?.detail;
-  if (typeof d === 'string') return d;
-  if (Array.isArray(d)) return d.map((x) => `${x.loc?.slice(-1)[0]}: ${x.msg}`).join(' | ');
-  if (typeof e === 'object' && e.response?.data?.detail) return String(e.response.data.detail);
-  if (!e?.response && e?.message) return e.message;
-  return 'Something went wrong. Please try again.';
-}
+export { errText } from './errText.js';
 
 /* ---------- Lazy-load mock module ---------- */
 let _mock = null;
@@ -121,6 +114,39 @@ export async function deleteTask(taskId) {
 
 /* ---------- Schedule ---------- */
 
+function _mergeFixedIntoItems(match) {
+  if (!match) return match;
+  const existingItems = match.items || [];
+  const fixedItems = (match.fixed || []).map((b) => ({
+    id: `fixed-${b.title}-${b.start}`,
+    title: b.title,
+    start_time: b.start,
+    end_time: b.end,
+    is_fixed: true,
+    kind: 'fixed',
+    tier: 'need_to',
+    status: 'scheduled',
+    done: false,
+  }));
+
+  const seenTitles = new Set(existingItems.filter((i) => i.is_fixed).map((i) => (i.title || '').toLowerCase()));
+  const seen = new Set(existingItems.map((i) => `${(i.title || '').toLowerCase()}-${i.start_time}`));
+  const merged = [...existingItems];
+  for (const fi of fixedItems) {
+    const key = `${fi.title.toLowerCase()}-${fi.start_time}`;
+    if (!seen.has(key) && !seenTitles.has(fi.title.toLowerCase())) {
+      merged.push(fi);
+      seen.add(key);
+      seenTitles.add(fi.title.toLowerCase());
+    }
+  }
+  merged.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+  return {
+    ...match,
+    items: merged,
+  };
+}
+
 export async function getSchedule(date) {
   if (USE_MOCK) {
     const m = await mock();
@@ -128,6 +154,18 @@ export async function getSchedule(date) {
   }
   const params = date ? { date } : {};
   const { data } = await http.get('/schedules', { params });
+  if (data && Array.isArray(data.days)) {
+    const targetDateStr = date || new Date().toISOString().split('T')[0];
+    const match = data.days.find((d) => d.date === targetDateStr) || data.days[0];
+    if (match) {
+      const mergedMatch = _mergeFixedIntoItems(match);
+      return {
+        ...mergedMatch,
+        at_risk: data.at_risk || [],
+        violations: data.violations || [],
+      };
+    }
+  }
   return data;
 }
 
@@ -137,6 +175,23 @@ export async function generateSchedule(date) {
     return m.generateSchedule(date);
   }
   const { data } = await http.post('/schedules/generate', { date });
+  if (data && data.violations && data.violations.length > 0) {
+    const err = new Error(`Schedule generation produced violations: ${data.violations.join('; ')}`);
+    err.response = { status: 422, data: { detail: data.violations } };
+    throw err;
+  }
+  if (data && Array.isArray(data.days)) {
+    const targetDateStr = date || new Date().toISOString().split('T')[0];
+    const match = data.days.find((d) => d.date === targetDateStr) || data.days[0];
+    if (match) {
+      const mergedMatch = _mergeFixedIntoItems(match);
+      return {
+        ...mergedMatch,
+        at_risk: data.at_risk || [],
+        violations: data.violations || [],
+      };
+    }
+  }
   return data;
 }
 
@@ -325,6 +380,61 @@ export async function saveOnboarding(answers) {
   return data;
 }
 
+export async function seedDemoStudent() {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.seedDemoStudent();
+  }
+  return null;
+}
+
+export async function getInsights() {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.getInsights();
+  }
+  return [];
+}
+
+export async function submitInsightFeedback(insightId, feedbackType) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.submitInsightFeedback(insightId, feedbackType);
+  }
+  return null;
+}
+
+/* ---------- Interventions ---------- */
+
+export async function getInterventions(status = 'active') {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.getInterventions(status);
+  }
+  const { data } = await http.get('/interventions', { params: { status } });
+  return data;
+}
+
+export async function dismissIntervention(interventionId) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.dismissIntervention(interventionId);
+  }
+  const { data } = await http.post(`/interventions/${interventionId}/dismiss`);
+  return data;
+}
+
+export async function snoozeIntervention(interventionId, snoozeUntil) {
+  if (USE_MOCK) {
+    const m = await mock();
+    return m.snoozeIntervention(interventionId, snoozeUntil);
+  }
+  const { data } = await http.post(`/interventions/${interventionId}/snooze`, {
+    snooze_until: snoozeUntil,
+  });
+  return data;
+}
+
 /* ---------- Semantic NLP Parser ---------- */
-export { parseTaskSemantics, parseTaskSemanticsAsync } from './semanticParser';
+export { parseTaskSemantics, parseTaskSemanticsAsync, parseDeadline, extractCleanTitle } from './semanticParser';
 

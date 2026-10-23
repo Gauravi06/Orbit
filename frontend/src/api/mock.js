@@ -8,8 +8,8 @@
  * Shape contracts match the FastAPI backend exactly.
  */
 
-import { parseTaskSemantics } from './semanticParser.js';
-export { parseTaskSemantics, parseTaskSemanticsAsync } from './semanticParser.js';
+import { parseTaskSemantics, parseDeadline, extractCleanTitle } from './semanticParser.js';
+export { parseTaskSemantics, parseTaskSemanticsAsync, parseDeadline, extractCleanTitle } from './semanticParser.js';
 
 /* ---------- helpers ---------- */
 let _id = 1000;
@@ -61,8 +61,50 @@ let schedules = [];
 let onboarded = false;
 let notes = [];
 let proposals = {}; // proposal_id -> { id, status, snapshot, what_changed, at_risk, summary, created_at }
+let interventions = [];
 
-const CURRENT_SCHEDULER_VERSION = '2026.10.balanced_v7_live';
+export const DEFAULT_INSIGHTS = [
+  {
+    id: 'morning-peak-focus',
+    title: 'Morning Deep Focus Peak Rhythm',
+    badge: 'Productivity Rhythm',
+    observation: 'You complete 85% of deep focus sessions scheduled before 11:00 AM, compared to 35% in late afternoons.',
+    evidence: 'Over the last 14 days, 9 of 11 morning sessions were completed on time. Late afternoon sessions (especially after 4 PM) faced frequent fatigue delays and postponements.',
+    adaptation: 'Orbit prioritizes challenging, high-cognitive coursework (such as DSA and Systems) in your morning window before college, keeping late afternoons for lighter tasks or recovery.',
+    howAffectsProposals: 'When disruptions occur or time opens up, Orbit prioritizes morning study sessions and shields late afternoons from heavy cognitive loads.',
+    appliedExample: 'When college cancelled today, Orbit automatically scheduled DSA in your morning slot.',
+    userFeedback: null,
+    feedbackMessage: null,
+  },
+  {
+    id: 'lecture-fatigue-cushion',
+    title: 'Post-Lecture Cognitive Fatigue Cushioning',
+    badge: 'Energy Protection',
+    observation: 'Days with 5+ hours of lectures (like Thursdays) consistently exhaust cognitive energy by 4 PM.',
+    evidence: 'On Thursdays and heavy lab days in your 14-day history, scheduled evening study sessions were missed or deferred 3 times, accompanied by fatigue feedback notes.',
+    adaptation: 'Orbit automatically cushions post-lecture returns with a mandatory 30-minute decompression buffer and defers demanding deliverables to the following morning.',
+    howAffectsProposals: 'Orbit rejects back-to-back study blocks immediately following college returns and protects evening rest.',
+    appliedExample: 'Avoids back-to-back study blocks immediately following college commute returns.',
+    userFeedback: null,
+    feedbackMessage: null,
+  },
+  {
+    id: 'sustainable-session-capping',
+    title: 'Sustainable 90-Minute Focus Capping',
+    badge: 'Cognitive Capacity',
+    observation: 'Focus sessions strictly capped at 90 minutes have a 92% completion rate, while marathon blocks show steep fatigue.',
+    evidence: 'Sessions scheduled beyond 90 minutes were abandoned or cut short 60% of the time, whereas 60–90m focused blocks with recovery buffers had consistent follow-through.',
+    adaptation: 'Orbit limits all continuous focus sessions to a maximum of 90 minutes and pairs them with an automatic 15-minute recovery buffer.',
+    howAffectsProposals: 'All proposed schedule changes split long backlog tasks into 60–90 minute sessions separated by recovery buffers.',
+    appliedExample: 'All deep focus blocks are strictly partitioned into 60–90m segments with recovery buffers.',
+    userFeedback: null,
+    feedbackMessage: null,
+  },
+];
+
+let insights = JSON.parse(JSON.stringify(DEFAULT_INSIGHTS));
+
+const CURRENT_SCHEDULER_VERSION = '2026.10.balanced_v8_live';
 
 function inferTaskMeta(task) {
   const title = (task.title || task.name || 'Untitled').trim();
@@ -307,6 +349,28 @@ function isTaskApplicableToDate(task, dateObj) {
 
   // 1. One-time deadline tasks: check allocated target dates
   if (meta.isOneTime) {
+    const semPref = meta.semantic_preferences || {};
+    const wantsSplit = semPref.split_preference;
+    const focusLen = Number(preferences.focus_length) || 60;
+    const maxSession = Math.max(45, Math.min(90, focusLen));
+    const isSplittable =
+      (meta.duration > maxSession && preferences.allow_splitting !== false && wantsSplit !== false) ||
+      (wantsSplit === true && meta.duration >= 30);
+
+    if (!isSplittable) {
+      // Single-session task: ensure it is not already scheduled on another active unclosed day
+      const alreadyActiveElsewhere = schedules.some((s) => {
+        if (s.date === dateStr || s.is_closed) return false;
+        return (s.items || []).some((it) => {
+          if (it.status === 'displaced' || it.is_fixed || it.done) return false;
+          if (task.id && it.task_id && task.id === it.task_id) return true;
+          if (it.title && task.title && it.title.toLowerCase() === task.title.toLowerCase()) return true;
+          return false;
+        });
+      });
+      if (alreadyActiveElsewhere) return false;
+    }
+
     const targetAllocations = getOneTimeTargetDates(meta, dateObj);
     return targetAllocations.some((alloc) => alloc.dateStr === dateStr);
   }
@@ -910,6 +974,8 @@ const STORAGE_KEY_PREFS = 'orbit_mock_preferences';
 const STORAGE_KEY_ONBOARDED = 'orbit_mock_onboarded';
 const STORAGE_KEY_NOTES = 'orbit_mock_notes';
 const STORAGE_KEY_PROPOSALS = 'orbit_mock_proposals';
+const STORAGE_KEY_INSIGHTS = 'orbit_mock_insights';
+const STORAGE_KEY_INTERVENTIONS = 'orbit_demo_interventions';
 
 export function loadStoredState() {
   let loadedTasks = null;
@@ -918,8 +984,18 @@ export function loadStoredState() {
   let loadedOnboarded = null;
 
   try {
+    const rawInsights = localStorage.getItem(STORAGE_KEY_INSIGHTS);
+    if (rawInsights) insights = JSON.parse(rawInsights);
+  } catch { /* ignore */ }
+
+  try {
     const rawProposals = localStorage.getItem(STORAGE_KEY_PROPOSALS);
     if (rawProposals) proposals = JSON.parse(rawProposals);
+  } catch { /* ignore */ }
+
+  try {
+    const rawInterventions = localStorage.getItem(STORAGE_KEY_INTERVENTIONS);
+    if (rawInterventions) interventions = JSON.parse(rawInterventions);
   } catch { /* ignore */ }
 
   try {
@@ -1011,6 +1087,8 @@ export function loadStoredState() {
     }
   }
 
+  schedules = finalSchedules;
+
   return {
     tasks: tasks,
     schedules: finalSchedules,
@@ -1049,6 +1127,12 @@ function persistState() {
   try {
     localStorage.setItem(STORAGE_KEY_PROPOSALS, JSON.stringify(proposals));
   } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_INSIGHTS, JSON.stringify(insights));
+  } catch { /* ignore */ }
+  try {
+    localStorage.setItem(STORAGE_KEY_INTERVENTIONS, JSON.stringify(interventions));
+  } catch { /* ignore */ }
 }
 
 export function resetDemoState() {
@@ -1059,9 +1143,13 @@ export function resetDemoState() {
     localStorage.removeItem(STORAGE_KEY_ONBOARDED);
     localStorage.removeItem(STORAGE_KEY_NOTES);
     localStorage.removeItem(STORAGE_KEY_PROPOSALS);
+    localStorage.removeItem(STORAGE_KEY_INSIGHTS);
+    localStorage.removeItem(STORAGE_KEY_INTERVENTIONS);
   } catch { /* ignore */ }
 
   proposals = {};
+  interventions = [];
+  insights = JSON.parse(JSON.stringify(DEFAULT_INSIGHTS));
 
   tasks = JSON.parse(JSON.stringify(INITIAL_TASKS));
   schedules = buildSeedPastDays();
@@ -1083,6 +1171,515 @@ export function resetDemoState() {
   };
   onboarded = false;
   notes = [];
+}
+
+/**
+ * 14-Day Demo Seed: Isolated, repeatable demo student.
+ * Creates realistic tasks, deadlines, 14-day schedule history (7 past, today, 6 future),
+ * past completion/missed states, disruptions, and feedback observations.
+ */
+export function seedDemoStudent() {
+  const now = todayDate();
+
+  preferences = {
+    wake_time: '07:00',
+    sleep_time: '23:30',
+    focus_length: 90,
+    prefer_long_sessions: true,
+    allow_splitting: true,
+    juggles: ['classes', 'gym', 'assignments'],
+    daily_load_cap_mins: 360,
+    protected_hobby_mins_week: 120,
+    best_time_of_day: 'morning',
+    weekend_mode: 'light',
+    fixed_commitments: [
+      {
+        id: 2001,
+        name: 'College Lectures',
+        days: 'Mon, Tue, Wed, Thu, Fri',
+        start_time: '09:00',
+        end_time: '15:00',
+        commute_before: 45,
+        commute_after: 30,
+      },
+      {
+        id: 2002,
+        name: 'Algorithms Seminar',
+        days: 'Tuesday',
+        start_time: '15:30',
+        end_time: '17:00',
+        commute_before: 0,
+        commute_after: 0,
+      },
+    ],
+  };
+
+  tasks = [
+    {
+      id: 3001,
+      title: 'DSA Problem Set: Dynamic Programming',
+      deadline: `${ymd(addDays(now, 2))}T23:59:00`,
+      duration: 90,
+      estimated_duration: 90,
+      priority: 4,
+      tier: 'have_to',
+      category: 'study',
+      done: false,
+      natural_language_note: 'high focus, best in the morning before lectures',
+    },
+    {
+      id: 3002,
+      title: 'Operating Systems Lab Report',
+      deadline: `${ymd(addDays(now, 4))}T23:59:00`,
+      duration: 90,
+      estimated_duration: 90,
+      priority: 4,
+      tier: 'have_to',
+      category: 'study',
+      done: false,
+      natural_language_note: 'virtual memory benchmarks',
+    },
+    {
+      id: 3003,
+      title: 'Database Architecture Project',
+      deadline: `${ymd(addDays(now, 7))}T23:59:00`,
+      duration: 90,
+      estimated_duration: 90,
+      priority: 3,
+      tier: 'need_to',
+      category: 'study',
+      done: false,
+    },
+    {
+      id: 3004,
+      title: 'Linear Algebra Problem Set',
+      deadline: `${ymd(addDays(now, 10))}T23:59:00`,
+      duration: 60,
+      estimated_duration: 60,
+      priority: 3,
+      tier: 'need_to',
+      category: 'study',
+      done: false,
+    },
+    {
+      id: 3005,
+      title: 'Morning Gym & Mobility',
+      duration: 60,
+      estimated_duration: 60,
+      priority: 3,
+      tier: 'need_to',
+      category: 'fitness',
+      frequency: 'daily',
+      done: false,
+    },
+    {
+      id: 3006,
+      title: 'Guitar Practice',
+      duration: 45,
+      estimated_duration: 45,
+      priority: 2,
+      tier: 'like_to',
+      category: 'hobby',
+      frequency: 'twice_weekly',
+      done: false,
+    },
+    {
+      id: 3007,
+      title: 'Weekly Reflection & Journaling',
+      duration: 30,
+      estimated_duration: 30,
+      priority: 2,
+      tier: 'like_to',
+      category: 'personal',
+      done: false,
+    },
+  ];
+
+  // 14-day history: 7 past days (-7 to -1), today (0), 6 upcoming days (1 to 6)
+  schedules = [];
+  for (let offset = -7; offset <= 6; offset++) {
+    const d = addDays(now, offset);
+    const sched = buildScheduleItems(d, 1);
+
+    if (offset < 0) {
+      sched.is_closed = true;
+      sched.closed_at = isoTime(d, 23, 15);
+
+      const dayOfWeek = d.getDay(); // 0 Sun ... 4 Thu
+
+      sched.items.forEach((item) => {
+        if (item.is_fixed) return;
+
+        const startH = Number(item.start_time.split('T')[1].slice(0, 2));
+
+        // Morning deep work sessions (before 12:00) had an 85% completion rate!
+        if (startH < 12) {
+          item.done = true;
+        } else if (dayOfWeek === 2 && offset === -5) {
+          if (item.title === 'College Lectures') {
+            item.status = 'cancelled';
+          }
+          item.done = true;
+        } else {
+          item.done = offset % 2 === 0;
+        }
+      });
+
+      if (dayOfWeek === 4) {
+        // Thursday evening study session: missed due to post-lecture fatigue
+        sched.items.push({
+          id: uid(),
+          task_id: 3004,
+          title: 'Linear Algebra Problem Set',
+          kind: 'deep',
+          tier: 'need_to',
+          start_time: isoTime(d, 17, 0),
+          end_time: isoTime(d, 18, 0),
+          status: 'displaced',
+          is_fixed: false,
+          done: false,
+          displacement_reason: 'Displaced to Friday: heavy Thursday lecture fatigue.',
+          move_count: 1,
+        });
+      }
+    } else {
+      sched.is_closed = false;
+      sched.closed_at = null;
+    }
+
+    schedules.push(sched);
+  }
+
+  notes = [
+    {
+      id: uid(),
+      date: ymd(addDays(now, -6)),
+      text: 'Morning focus on DSA felt sharp. Completed recursive graph search before 9 AM lectures.',
+      kind: 'reflection',
+      created_at: isoTime(addDays(now, -6), 21, 30),
+    },
+    {
+      id: uid(),
+      date: ymd(addDays(now, -4)),
+      text: 'Heavy Thursday lecture block left me drained by 4 PM. Could not focus on evening reading.',
+      kind: 'feedback',
+      created_at: isoTime(addDays(now, -4), 19, 0),
+    },
+    {
+      id: uid(),
+      date: ymd(addDays(now, -3)),
+      text: 'Having a 30-minute decompression cushion after returning from college helped recharge for dinner.',
+      kind: 'reflection',
+      created_at: isoTime(addDays(now, -3), 22, 10),
+    },
+    {
+      id: uid(),
+      date: ymd(addDays(now, -1)),
+      text: 'Protected 45 mins of guitar practice kept my week feeling balanced instead of all work.',
+      kind: 'reflection',
+      created_at: isoTime(addDays(now, -1), 21, 0),
+    },
+  ];
+
+  insights = JSON.parse(JSON.stringify(DEFAULT_INSIGHTS));
+  onboarded = true;
+  proposals = {};
+
+  persistState();
+  return { tasks, schedules, preferences, notes, insights };
+}
+
+export async function getInsights() {
+  await delay(100);
+  return JSON.parse(JSON.stringify(insights));
+}
+
+export async function submitInsightFeedback(insightId, feedbackType) {
+  await delay(100);
+  const ins = insights.find((i) => i.id === insightId);
+  if (ins) {
+    ins.userFeedback = feedbackType;
+    ins.feedbackMessage = feedbackType === 'yes'
+      ? 'Preference confirmed: Orbit will continue prioritizing this rhythm in future schedule changes.'
+      : 'Noted: Orbit has adjusted this weighting and will observe your updated preferences.';
+    persistState();
+    return { ...ins };
+  }
+  return null;
+}
+
+/* ---------- Interventions API ---------- */
+
+export async function getInterventions(status = 'active') {
+  await delay(100);
+  const now = new Date();
+
+  // 1. Awaken snoozed interventions whose time has arrived
+  for (const inv of interventions) {
+    if (inv.status === 'snoozed' && inv.snoozed_until && new Date(inv.snoozed_until) <= now) {
+      inv.status = 'active';
+      inv.snoozed_until = null;
+      inv.updated_at = now.toISOString();
+    }
+  }
+
+  // 2. Evaluate tasks for overdue and approaching deadlines (<24h)
+  for (const task of tasks) {
+    if (task.is_fixed) continue;
+
+    // Resolve interventions if task is finished or cancelled
+    if (task.done || ['completed', 'done', 'cancelled', 'deleted'].includes(task.status)) {
+      for (const inv of interventions) {
+        if (inv.task_id === task.id && (inv.status === 'active' || inv.status === 'snoozed')) {
+          inv.status = 'resolved';
+          inv.resolved_at = now.toISOString();
+          inv.updated_at = now.toISOString();
+        }
+      }
+      continue;
+    }
+
+    if (!task.deadline) {
+      for (const inv of interventions) {
+        if (inv.task_id === task.id && (inv.intervention_type === 'approaching_deadline' || inv.intervention_type === 'overdue') && (inv.status === 'active' || inv.status === 'snoozed')) {
+          inv.status = 'resolved';
+          inv.resolved_at = now.toISOString();
+          inv.updated_at = now.toISOString();
+        }
+      }
+    } else {
+      const dStr = task.deadline.includes('T') ? task.deadline : `${task.deadline}T23:59:00`;
+      const deadlineDate = new Date(dStr);
+      if (!isNaN(deadlineDate.getTime())) {
+        const diffHours = (deadlineDate.getTime() - now.getTime()) / (1000 * 60 * 60);
+
+        if (diffHours < 0) {
+          // Overdue
+          const dedupKey = `mock-user:${task.id}:overdue`;
+          for (const inv of interventions) {
+            if (inv.task_id === task.id && inv.intervention_type === 'approaching_deadline' && (inv.status === 'active' || inv.status === 'snoozed')) {
+              inv.status = 'resolved';
+              inv.resolved_at = now.toISOString();
+              inv.updated_at = now.toISOString();
+            }
+          }
+          let existing = interventions.find((i) => i.dedup_key === dedupKey);
+          const title = `Overdue: ${task.title || task.name}`;
+          const message = `'${task.title || task.name}' was due on ${deadlineDate.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}. Review your plan to reschedule or finish it.`;
+
+          if (existing) {
+            if (existing.status === 'active') {
+              existing.title = title;
+              existing.message = message;
+              existing.updated_at = now.toISOString();
+            } else if (existing.status === 'snoozed') {
+              if (existing.snoozed_until && new Date(existing.snoozed_until) <= now) {
+                existing.status = 'active';
+                existing.snoozed_until = null;
+                existing.title = title;
+                existing.message = message;
+                existing.updated_at = now.toISOString();
+              }
+            } else if (existing.status === 'resolved') {
+              existing.status = 'active';
+              existing.resolved_at = null;
+              existing.title = title;
+              existing.message = message;
+              existing.updated_at = now.toISOString();
+            }
+          } else {
+            interventions.unshift({
+              id: String(uid()),
+              user_id: 'mock-user',
+              task_id: task.id,
+              intervention_type: 'overdue',
+              title,
+              message,
+              status: 'active',
+              dedup_key: dedupKey,
+              snoozed_until: null,
+              dismissed_at: null,
+              resolved_at: null,
+              created_at: now.toISOString(),
+              updated_at: now.toISOString(),
+            });
+          }
+        } else if (diffHours <= 24) {
+          // Approaching deadline
+          const dedupKey = `mock-user:${task.id}:approaching_deadline`;
+          for (const inv of interventions) {
+            if (inv.task_id === task.id && inv.intervention_type === 'overdue' && (inv.status === 'active' || inv.status === 'snoozed')) {
+              inv.status = 'resolved';
+              inv.resolved_at = now.toISOString();
+              inv.updated_at = now.toISOString();
+            }
+          }
+          let existing = interventions.find((i) => i.dedup_key === dedupKey);
+          const title = `Approaching deadline: ${task.title || task.name}`;
+          const hoursRemaining = Math.max(0.1, Math.round(diffHours * 10) / 10);
+          const hoursStr = Number.isInteger(hoursRemaining) ? `${hoursRemaining} hour${hoursRemaining === 1 ? '' : 's'}` : `${hoursRemaining} hours`;
+          const message = `'${task.title || task.name}' is due in ${hoursStr}.`;
+
+          if (existing) {
+            if (existing.status === 'active') {
+              existing.title = title;
+              existing.message = message;
+              existing.updated_at = now.toISOString();
+            } else if (existing.status === 'snoozed') {
+              if (existing.snoozed_until && new Date(existing.snoozed_until) <= now) {
+                existing.status = 'active';
+                existing.snoozed_until = null;
+                existing.title = title;
+                existing.message = message;
+                existing.updated_at = now.toISOString();
+              }
+            } else if (existing.status === 'resolved') {
+              existing.status = 'active';
+              existing.resolved_at = null;
+              existing.title = title;
+              existing.message = message;
+              existing.updated_at = now.toISOString();
+            }
+          } else {
+            interventions.unshift({
+              id: String(uid()),
+              user_id: 'mock-user',
+              task_id: task.id,
+              intervention_type: 'approaching_deadline',
+              title,
+              message,
+              status: 'active',
+              dedup_key: dedupKey,
+              snoozed_until: null,
+              dismissed_at: null,
+              resolved_at: null,
+              created_at: now.toISOString(),
+              updated_at: now.toISOString(),
+            });
+          }
+        } else {
+          // Comfortably in the future
+          for (const inv of interventions) {
+            if (inv.task_id === task.id && (inv.intervention_type === 'approaching_deadline' || inv.intervention_type === 'overdue') && (inv.status === 'active' || inv.status === 'snoozed')) {
+              inv.status = 'resolved';
+              inv.resolved_at = now.toISOString();
+              inv.updated_at = now.toISOString();
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Check for repeated unfinished planned days in mock mode
+    const pastDaysWithTask = new Set();
+    const todayStr = ymd(now);
+    for (const sched of schedules) {
+      if (sched.date < todayStr && sched.items) {
+        for (const it of sched.items) {
+          if (it.task_id === task.id && !it.is_fixed && !it.done && it.status !== 'completed' && it.status !== 'done' && it.status !== 'cancelled') {
+            pastDaysWithTask.add(sched.date);
+          }
+        }
+      }
+    }
+
+    const repDedupKey = `mock-user:${task.id}:repeated_unfinished`;
+    if (pastDaysWithTask.size >= 2) {
+      const repTitle = `Plan check: ${task.title || task.name}`;
+      const repMessage = `'${task.title || task.name}' has remained unfinished across ${pastDaysWithTask.size} past planned days. Is the current plan not working?`;
+      let existingRep = interventions.find((i) => i.dedup_key === repDedupKey);
+      if (existingRep) {
+        if (existingRep.status === 'active') {
+          existingRep.title = repTitle;
+          existingRep.message = repMessage;
+          existingRep.updated_at = now.toISOString();
+        } else if (existingRep.status === 'snoozed') {
+          if (existingRep.snoozed_until && new Date(existingRep.snoozed_until) <= now) {
+            existingRep.status = 'active';
+            existingRep.snoozed_until = null;
+            existingRep.title = repTitle;
+            existingRep.message = repMessage;
+            existingRep.updated_at = now.toISOString();
+          }
+        } else if (existingRep.status === 'resolved') {
+          existingRep.status = 'active';
+          existingRep.resolved_at = null;
+          existingRep.title = repTitle;
+          existingRep.message = repMessage;
+          existingRep.updated_at = now.toISOString();
+        }
+      } else {
+        interventions.unshift({
+          id: String(uid()),
+          user_id: 'mock-user',
+          task_id: task.id,
+          intervention_type: 'repeated_unfinished',
+          title: repTitle,
+          message: repMessage,
+          status: 'active',
+          dedup_key: repDedupKey,
+          snoozed_until: null,
+          dismissed_at: null,
+          resolved_at: null,
+          created_at: now.toISOString(),
+          updated_at: now.toISOString(),
+        });
+      }
+    } else {
+      for (const inv of interventions) {
+        if (inv.task_id === task.id && inv.intervention_type === 'repeated_unfinished' && (inv.status === 'active' || inv.status === 'snoozed')) {
+          inv.status = 'resolved';
+          inv.resolved_at = now.toISOString();
+          inv.updated_at = now.toISOString();
+        }
+      }
+    }
+  }
+
+  persistState();
+
+  if (!status || status === 'all') {
+    return [...interventions];
+  }
+  return interventions.filter((inv) => inv.status === status);
+}
+
+export async function dismissIntervention(interventionId) {
+  await delay(50);
+  const now = new Date();
+  const inv = interventions.find((i) => String(i.id) === String(interventionId));
+  if (!inv) {
+    const err = new Error('Intervention not found');
+    err.response = { status: 404, data: { detail: 'Intervention not found' } };
+    throw err;
+  }
+  inv.status = 'dismissed';
+  inv.dismissed_at = now.toISOString();
+  inv.updated_at = now.toISOString();
+  persistState();
+  return { ...inv };
+}
+
+export async function snoozeIntervention(interventionId, snoozeUntil) {
+  await delay(50);
+  const now = new Date();
+  const inv = interventions.find((i) => String(i.id) === String(interventionId));
+  if (!inv) {
+    const err = new Error('Intervention not found');
+    err.response = { status: 404, data: { detail: 'Intervention not found' } };
+    throw err;
+  }
+  const snoozeDate = new Date(snoozeUntil);
+  if (isNaN(snoozeDate.getTime()) || snoozeDate <= now) {
+    const err = new Error('snooze_until must be in the future');
+    err.response = { status: 422, data: { detail: 'snooze_until must be in the future' } };
+    throw err;
+  }
+  inv.status = 'snoozed';
+  inv.snoozed_until = snoozeDate.toISOString();
+  inv.updated_at = now.toISOString();
+  persistState();
+  return { ...inv };
 }
 
 /* ---------- Mock user ---------- */
@@ -1444,6 +2041,36 @@ export async function closeDay(dateStr) {
       continue;
     }
 
+    const taskId = item.task_id || (matchingTask ? matchingTask.id : null);
+
+    // If task is already completed, do not carry forward
+    if (item.done || matchingTask?.done) {
+      continue;
+    }
+
+    // Check if task already has an active, non-displaced scheduled block on any future unclosed day
+    const alreadyScheduledInFuture = schedules.find((s) => {
+      if (s.date < ymd(startDate) || s.is_closed) return false;
+      return (s.items || []).some((it) => {
+        if (it.status === 'displaced' || it.is_fixed) return false;
+        if (taskId && it.task_id && taskId === it.task_id) return true;
+        if (it.title && item.title && it.title.toLowerCase() === item.title.toLowerCase()) return true;
+        return false;
+      });
+    });
+
+    if (alreadyScheduledInFuture) {
+      item.status = 'displaced';
+      const futDate = new Date(alreadyScheduledInFuture.date + 'T00:00:00');
+      item.displacement_reason = `Already scheduled for ${futDate.toLocaleDateString('en-US', { weekday: 'short' })}`;
+      movedList.push({
+        title: item.title,
+        targetDate: alreadyScheduledInFuture.date,
+        targetDayName: futDate.toLocaleDateString('en-US', { weekday: 'long' }),
+      });
+      continue;
+    }
+
     const itemDuration = calcMins(item.start_time, item.end_time) || 60;
     const moveCount = (item.move_count || 0) + 1;
     item.move_count = moveCount;
@@ -1470,9 +2097,12 @@ export async function closeDay(dateStr) {
       }
 
       // Check if candidate schedule already contains an active occurrence of this task
-      const existingCandItem = candSched.items.find(
-        (i) => i.title && i.title.toLowerCase() === item.title.toLowerCase() && !i.is_fixed && i.status !== 'displaced'
-      );
+      const existingCandItem = candSched.items.find((i) => {
+        if (i.is_fixed || i.status === 'displaced') return false;
+        if (taskId && i.task_id && taskId === i.task_id) return true;
+        if (i.title && item.title && i.title.toLowerCase() === item.title.toLowerCase()) return true;
+        return false;
+      });
 
       if (existingCandItem) {
         // Already scheduled on candidate day — update metadata/move_count to avoid duplicate copy
@@ -1509,9 +2139,10 @@ export async function closeDay(dateStr) {
       const candSleep = parseTimeToMins(preferences.sleep_time || '23:30');
       const latestWork = candSleep - 30;
 
-      // Collect busy periods
+      // Collect busy periods (excluding open blocks and displaced items)
       const candBusy = [];
       candSched.items.forEach((it) => {
+        if (it.kind === 'open' || it.status === 'displaced') return;
         const s = parseTimeToMins(it.start_time.split('T')[1].slice(0, 5));
         const e = parseTimeToMins(it.end_time.split('T')[1].slice(0, 5));
         candBusy.push({ start: s, end: e });
@@ -1542,9 +2173,12 @@ export async function closeDay(dateStr) {
 
         const displacedReason = `Left from ${weekdayName}, so I put it here.`;
 
+        // Clear existing open blocks to recalculate cleanly
+        candSched.items = candSched.items.filter((it) => it.kind !== 'open');
+
         candSched.items.push({
           id: uid(),
-          task_id: item.task_id || null,
+          task_id: taskId || item.task_id || null,
           title: item.title,
           kind: item.kind,
           tier: item.tier,
@@ -1557,6 +2191,50 @@ export async function closeDay(dateStr) {
           displacement_reason: displacedReason,
           move_count: moveCount,
         });
+
+        // Rebuild open blocks
+        let curPtr = candWake;
+        const activeBusy = candSched.items
+          .filter((it) => it.status !== 'displaced')
+          .map((it) => ({
+            start: parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)),
+            end: parseTimeToMins(it.end_time.split('T')[1].slice(0, 5)),
+          }))
+          .sort((a, b) => a.start - b.start);
+
+        for (const b of activeBusy) {
+          if (b.start > curPtr && b.start - curPtr >= 45) {
+            candSched.items.push({
+              id: uid(),
+              task_id: null,
+              title: 'Open Block',
+              kind: 'open',
+              tier: 'like_to',
+              start_time: isoTime(candidateDate, Math.floor(curPtr / 60), curPtr % 60),
+              end_time: isoTime(candidateDate, Math.floor(b.start / 60), b.start % 60),
+              status: 'scheduled',
+              is_fixed: true,
+              done: false,
+              move_count: 0,
+            });
+          }
+          curPtr = Math.max(curPtr, b.end);
+        }
+        if (latestWork - curPtr >= 45) {
+          candSched.items.push({
+            id: uid(),
+            task_id: null,
+            title: 'Open Block',
+            kind: 'open',
+            tier: 'like_to',
+            start_time: isoTime(candidateDate, Math.floor(curPtr / 60), curPtr % 60),
+            end_time: isoTime(candidateDate, Math.floor(latestWork / 60), latestWork % 60),
+            status: 'scheduled',
+            is_fixed: true,
+            done: false,
+            move_count: 0,
+          });
+        }
 
         candSched.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
         candSched.version = (candSched.version || 1) + 1;
@@ -1814,6 +2492,44 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
     textLower.includes('reschedule') ||
     textLower.includes('too heavy');
 
+  const isTiredOrOverwhelmed =
+    textLower.includes('too much') ||
+    textLower.includes('tired') ||
+    textLower.includes('exhaust') ||
+    textLower.includes('drained') ||
+    textLower.includes('plate') ||
+    textLower.includes('overwhelm');
+
+  const isWrongTime =
+    textLower.includes('wrong time') ||
+    textLower.includes('time of day') ||
+    textLower.includes('prefer morning') ||
+    textLower.includes('prefer evening');
+
+  const isShortBreaks =
+    textLower.includes('breaks too short') ||
+    textLower.includes('short break') ||
+    textLower.includes('longer break') ||
+    textLower.includes('more rest');
+
+  const isScheduleChangeRequest =
+    Boolean(matchedTaskTitle && isMoveRequest) ||
+    isTiredOrOverwhelmed ||
+    isWrongTime ||
+    isShortBreaks;
+
+  if (!isScheduleChangeRequest) {
+    return {
+      success: true,
+      what_changed: [],
+      proposal: null,
+      message: 'Feedback recorded. Orbit will factor this into upcoming schedules without changing your active schedule.',
+    };
+  }
+
+  // Work on a candidate snapshot to prevent silent mutation of active schedules
+  const snapshot = JSON.parse(JSON.stringify(schedules));
+
   // Case 1: Specific task relocation requested
   if (matchedTaskTitle && isMoveRequest) {
     let movedSuccessfully = false;
@@ -1822,7 +2538,7 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
     for (let offset = 0; offset <= 4; offset++) {
       const sourceDate = addDays(todayDate(), offset);
       const sourceDateStr = ymd(sourceDate);
-      const sourceSched = schedules.find((s) => s.date === sourceDateStr);
+      const sourceSched = snapshot.find((s) => s.date === sourceDateStr);
       if (!sourceSched || sourceSched.is_closed) continue;
 
       const itemIdx = sourceSched.items.findIndex(
@@ -1838,10 +2554,10 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
         for (let destOffset = offset + 1; destOffset <= offset + 4; destOffset++) {
           const destDate = addDays(todayDate(), destOffset);
           const destDateStr = ymd(destDate);
-          let destSched = schedules.find((s) => s.date === destDateStr);
+          let destSched = snapshot.find((s) => s.date === destDateStr);
           if (!destSched) {
             destSched = buildScheduleItems(destDate, 1);
-            schedules.push(destSched);
+            snapshot.push(destSched);
           }
           if (destSched.is_closed) continue;
 
@@ -1853,12 +2569,10 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
           );
 
           if (existingDestItem) {
-            // Already scheduled on destination day — update metadata/move count to avoid duplicate
             existingDestItem.move_count = (existingDestItem.move_count || 0) + 1;
             existingDestItem.displacement_reason = `Rescheduled from ${sourceDayName} based on your feedback.`;
             destSched.version = (destSched.version || 1) + 1;
 
-            // Remove/displace from sourceSched
             sourceSched.items.splice(itemIdx, 1);
             sourceSched.version = (sourceSched.version || 1) + 1;
 
@@ -1896,7 +2610,6 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
           }
 
           if (freeStart !== null) {
-            const destDayName = destDate.toLocaleDateString('en-US', { weekday: 'long' });
             const newStartH = Math.floor(freeStart / 60);
             const newStartM = freeStart % 60;
             const freeEnd = freeStart + itemDuration;
@@ -1922,7 +2635,6 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
             destSched.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
             destSched.version = (destSched.version || 1) + 1;
 
-            // Remove/displace from sourceSched
             sourceSched.items.splice(itemIdx, 1);
             sourceSched.version = (sourceSched.version || 1) + 1;
 
@@ -1940,38 +2652,16 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
   }
 
   // Case 2: General fatigue / overload
-  const isTiredOrOverwhelmed =
-    textLower.includes('too much') ||
-    textLower.includes('tired') ||
-    textLower.includes('exhaust') ||
-    textLower.includes('drained') ||
-    textLower.includes('plate') ||
-    textLower.includes('overwhelm');
-
-  const isWrongTime =
-    textLower.includes('wrong time') ||
-    textLower.includes('time of day') ||
-    textLower.includes('prefer morning') ||
-    textLower.includes('prefer evening');
-
-  const isShortBreaks =
-    textLower.includes('breaks too short') ||
-    textLower.includes('short break') ||
-    textLower.includes('longer break') ||
-    textLower.includes('more rest');
-
   if (whatChanged.length === 0) {
     for (let offset = 1; offset <= 4; offset++) {
       const candidateDate = addDays(todayDate(), offset);
       const dateStr = ymd(candidateDate);
-      const sched = schedules.find((s) => s.date === dateStr);
+      const sched = snapshot.find((s) => s.date === dateStr);
       if (!sched || sched.is_closed) continue;
 
       sched.version = (sched.version || 1) + 1;
 
       if (isTiredOrOverwhelmed) {
-        preferences.daily_load_cap_mins = Math.max(180, (preferences.daily_load_cap_mins || 360) - 60);
-
         const lowerItem = sched.items.find((i) => !i.is_fixed && i.tier !== 'have_to' && i.status !== 'displaced');
         if (lowerItem) {
           lowerItem.status = 'displaced';
@@ -2007,11 +2697,26 @@ export async function replanSchedule({ reason, feedbackText, clarification }) {
     );
   }
 
-  persistState();
+  const proposalId = uid();
+  const proposal = {
+    proposal_id: proposalId,
+    status: 'pending',
+    summary: `Proposed schedule adjustment (${whatChanged.length} change${whatChanged.length !== 1 ? 's' : ''})`,
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    snapshot,
+    what_changed: whatChanged,
+    at_risk: [],
+    violations: [],
+    days: snapshot,
+  };
+  proposals[proposalId] = proposal;
 
   return {
     success: true,
     what_changed: whatChanged,
+    proposal,
+    message: 'Proposed schedule adjustment created. Review and approve below to apply it.',
   };
 }
 
@@ -2199,6 +2904,8 @@ function parseTimeFromText(textLower) {
     /(?:got\s+back(?:\s+home)?|back\s+home|got\s+home|arrived(?:\s+home)?|home)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
     /(?:free\s+(?:after|at|from)|available\s+(?:after|at|from)|after|from|by)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
     /\bat\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i,
+    /\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i,
+    /\b([01]?\d|2[0-3]):([0-5]\d)\b/i,
   ];
   for (const re of timeRegexes) {
     const m = textLower.match(re);
@@ -2209,7 +2916,7 @@ function parseTimeFromText(textLower) {
       if (meridiem === 'pm' && h < 12) h += 12;
       else if (meridiem === 'am' && h === 12) h = 0;
       else if (!meridiem) {
-        if (h >= 1 && h <= 6) h += 12;
+        if (!m[0].includes(':') && h >= 1 && h <= 6) h += 12;
       }
       return h * 60 + min;
     }
@@ -2358,7 +3065,10 @@ export async function proposeDisruption(text, date, selectedOption = null) {
   const at_risk = [];
 
   const wakeMins = parseTimeToMins(preferences.wake_time || '07:00');
-  const sleepMins = parseTimeToMins(preferences.sleep_time || '23:30');
+  let sleepMins = parseTimeToMins(preferences.sleep_time || '23:30');
+  if (sleepMins <= wakeMins) {
+    sleepMins += 1440;
+  }
   const latestWorkTime = sleepMins - 30; // 30 min wind-down buffer
 
   // 3. Parse stated time & duration
@@ -2367,7 +3077,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
 
   // 4. Categorize Intents
   const isCancelled = /\b(cancel|cancelled|canceled|canceling|cancelling|called off|calling off|no lecture|no lectures|no class|no classes|no rotation|no lab|no meeting)\b/i.test(textLower);
-  const isAllDayCancellation = /\b(all\s+(?:classes|lectures)|whole\s+day|day\s+off|no\s+(?:classes|lectures)\s+today)\b/i.test(textLower);
+  const isAllDayCancellation = /\b(all\s+(?:classes|lectures|college)|whole\s+day|all\s+day|day\s+off|home\s+all\s+day|no\s+(?:classes|lectures|college)\s+today|(?:college|classes|lectures)\s+(?:entirely\s+|completely\s+)?(?:cancelled|canceled|called off)|entirely\s+(?:cancelled|canceled)|completely\s+(?:cancelled|canceled))\b/i.test(textLower);
   const isEarlyArrival = statedTimeMins !== null && /\b(got\s+back(?:\s+home)?|back\s+home|got\s+home|arrived|home|early)\b/i.test(textLower);
   const isRest = /\b(exhaust|exhausted|tired|sick|need rest|need to rest|unwell|fever|headache|burnt out|burnout|drained|take a break|rest tonight|take it easy)\b/i.test(textLower);
   const isDelayed = /\b(delayed|running late|stuck in traffic|stuck until|busy until|cant study until|cannot study until|tied up until|emergency until|held up)\b/i.test(textLower);
@@ -2397,10 +3107,27 @@ export async function proposeDisruption(text, date, selectedOption = null) {
     }
   });
 
+  const cancelledTerms = new Set([
+    'college', 'college lectures', 'classes', 'class', 'lecture', 'lectures',
+    'coursework', 'lab', 'laboratory', 'rotation', 'clinic', 'hospital',
+    'meeting', 'discussion'
+  ]);
+
   let matchedSpecificTask = null;
   for (const t of allKnownTasks) {
     const tTitle = (t.title || t.name || '').toLowerCase().trim();
-    if (tTitle && tTitle.length > 2 && textLower.includes(tTitle)) {
+    if (!tTitle || tTitle.length <= 2) continue;
+    if (isCancelled && cancelledTerms.has(tTitle)) {
+      continue;
+    }
+    if (isCancelled) {
+      const escaped = tTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const cancelRegex = new RegExp(`(?:\\b(?:cancel|cancelled|canceled|canceling|cancelling|call off|called off|no)\\s+${escaped}\\b|\\b${escaped}\\s+(?:entirely\\s+|completely\\s+)?(?:cancelled|canceled|called off)\\b)`, 'i');
+      if (cancelRegex.test(textLower)) {
+        continue;
+      }
+    }
+    if (textLower.includes(tTitle)) {
       matchedSpecificTask = t;
       break;
     }
@@ -2463,97 +3190,211 @@ export async function proposeDisruption(text, date, selectedOption = null) {
   const isLabMention = /\b(lab|laboratory)\b/i.test(textLower);
   const isMeetingMention = /\b(meeting|discussion)\b/i.test(textLower);
 
-  const matchingCommitmentItem = updated.items.find((item) => {
+  const candidateCommitments = updated.items.filter((item) => {
     if (item.kind !== 'fixed') return false;
     const iTitle = (item.title || '').toLowerCase();
-    if (isLectureMention && (iTitle.includes('lecture') || iTitle.includes('class') || iTitle.includes('college'))) return true;
+    if (item.kind === 'routine' || item.kind === 'decompression' || item.kind === 'break') return false;
+    if (iTitle.startsWith('travel:') || iTitle.startsWith('transition:') || iTitle.startsWith('buffer after')) return false;
+
+    if (isLectureMention && (iTitle.includes('lecture') || iTitle.includes('class') || iTitle.includes('college') || iTitle.includes('coursework'))) return true;
     if (isRotationMention && (iTitle.includes('rotation') || iTitle.includes('clinic') || iTitle.includes('hospital'))) return true;
     if (isLabMention && iTitle.includes('lab')) return true;
-    if (isMeetingMention && iTitle.includes('meeting')) return true;
+    if (isMeetingMention && (iTitle.includes('meeting') || iTitle.includes('discussion'))) return true;
     if (matchedSpecificTask && iTitle.includes((matchedSpecificTask.title || '').toLowerCase())) return true;
     return false;
   });
 
+  const cancelledCommitmentTitles = new Set();
+  if (isCancelled) {
+    candidateCommitments.forEach((c) => {
+      cancelledCommitmentTitles.add((c.title || '').toLowerCase());
+    });
+    if (isLectureMention) {
+      cancelledCommitmentTitles.add('college');
+      cancelledCommitmentTitles.add('college lectures');
+      cancelledCommitmentTitles.add('lecture');
+      cancelledCommitmentTitles.add('lectures');
+      cancelledCommitmentTitles.add('class');
+      cancelledCommitmentTitles.add('classes');
+    }
+    if (isLabMention) cancelledCommitmentTitles.add('lab');
+    if (isRotationMention) cancelledCommitmentTitles.add('rotation');
+    if (isMeetingMention) cancelledCommitmentTitles.add('meeting');
+  }
+
+  if (matchedSpecificTask && isCancelled) {
+    const mstLower = (matchedSpecificTask.title || matchedSpecificTask.name || '').toLowerCase();
+    if (cancelledTerms.has(mstLower) || cancelledCommitmentTitles.has(mstLower)) {
+      matchedSpecificTask = null;
+    }
+  }
+
   let freedTimeSlotStart = statedTimeMins !== null ? statedTimeMins : null;
 
-  if (matchingCommitmentItem) {
-    const commTitle = matchingCommitmentItem.title;
-    const commTitleLower = commTitle.toLowerCase();
-    const commStartM = parseTimeToMins(matchingCommitmentItem.start_time.split('T')[1].slice(0, 5));
-    const commEndM = parseTimeToMins(matchingCommitmentItem.end_time.split('T')[1].slice(0, 5));
-
-    // Find return commute / travel block after commitment
-    const returnCommuteIdx = updated.items.findIndex((it) => {
-      const itTitle = (it.title || '').toLowerCase();
-      return (
-        itTitle.includes(`transition: ${commTitleLower}`) ||
-        itTitle.includes(`buffer after ${commTitleLower}`) ||
-        (itTitle.includes(`travel: ${commTitleLower}`) && parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)) >= commEndM)
-      );
-    });
-
-    const commuteAfterDur =
-      returnCommuteIdx >= 0
-        ? Math.max(
-            15,
-            Math.round(
-              (new Date(updated.items[returnCommuteIdx].end_time).getTime() -
-                new Date(updated.items[returnCommuteIdx].start_time).getTime()) /
-                60000
-            )
-          )
-        : 30;
-
-    if (isEarlyArrival && statedTimeMins !== null && !isAllDayCancellation) {
-      // User got home at statedTimeMins (e.g. 15:00 = 3 PM)
-      // Departure from college happened before arrival: 15:00 - commuteAfterDur (e.g. 14:30)
-      const adjustedFinishMins = Math.max(commStartM + 30, statedTimeMins - commuteAfterDur);
-      matchingCommitmentItem.end_time = isoTime(
-        targetDateObj,
-        Math.floor(adjustedFinishMins / 60),
-        adjustedFinishMins % 60
-      );
-
+  if (isAllDayCancellation && (isCancelled || /\b(home\s+all\s+day|day\s+off|whole\s+day|all\s+day)\b/i.test(textLower))) {
+    // All-day cancellation: remove all relevant fixed commitments
+    if (candidateCommitments.length > 0) {
+      const removedIds = new Set(candidateCommitments.map((c) => c.id));
+      const removedTitles = candidateCommitments.map((c) => (c.title || '').toLowerCase());
+      updated.items = updated.items.filter((item) => {
+        if (removedIds.has(item.id)) return false;
+        const iTitle = (item.title || '').toLowerCase();
+        for (const ct of removedTitles) {
+          if (
+            iTitle === `travel: ${ct}` ||
+            iTitle === `transition: ${ct}` ||
+            iTitle === `buffer after ${ct}`
+          ) {
+            return false;
+          }
+        }
+        return true;
+      });
       what_changed.push(
-        `Shortened "${commTitle}" on ${targetDayName} to end at ${formatTime24(adjustedFinishMins)} due to early departure.`
+        `Removed cancelled ${candidateCommitments.map((c) => `"${c.title}"`).join(' and ')} (and associated travel/buffer) on ${targetDayName}.`
       );
+    } else {
+      what_changed.push(`Confirmed college and classes are cancelled for the day on ${targetDayName}.`);
+    }
+    if (freedTimeSlotStart === null) {
+      freedTimeSlotStart = wakeMins;
+    }
+  } else {
+    // Single or time-specific commitment cancellation / early arrival
+    let matchingCommitmentItem = null;
 
-      if (returnCommuteIdx >= 0) {
-        updated.items[returnCommuteIdx].start_time = isoTime(
+    if (candidateCommitments.length > 0) {
+      if (statedTimeMins !== null) {
+        const scored = candidateCommitments.map((c) => {
+          const startM = parseTimeToMins(c.start_time.split('T')[1].slice(0, 5));
+          const endM = parseTimeToMins(c.end_time.split('T')[1].slice(0, 5));
+          const covers = statedTimeMins >= startM && statedTimeMins <= endM;
+          const diff = Math.min(Math.abs(startM - statedTimeMins), Math.abs(endM - statedTimeMins));
+          return { commitment: c, startM, endM, covers, diff };
+        });
+
+        // Filter to commitments covering or within 60 mins of stated time
+        const pool = scored.filter((sc) => sc.covers || sc.diff <= 60);
+        pool.sort((a, b) => {
+          if (a.covers && !b.covers) return -1;
+          if (!a.covers && b.covers) return 1;
+          return a.diff - b.diff;
+        });
+
+        if (pool.length > 1 && pool[0].diff === pool[1].diff && pool[0].covers === pool[1].covers) {
+          return {
+            needs_clarification: true,
+            question: `Which lecture was cancelled? You have multiple classes around ${formatMinsFriendly(statedTimeMins)}.`,
+            prompt_text: text,
+            target_date: targetDateStr,
+          };
+        }
+
+        matchingCommitmentItem = pool.length > 0 ? pool[0].commitment : null;
+      } else {
+        if (candidateCommitments.length > 1 && isCancelled) {
+          return {
+            needs_clarification: true,
+            question: `You have multiple classes scheduled for ${targetDayName}. Which one was cancelled?`,
+            prompt_text: text,
+            target_date: targetDateStr,
+          };
+        }
+        matchingCommitmentItem = candidateCommitments[0];
+      }
+    }
+
+    if (matchingCommitmentItem) {
+      const commTitle = matchingCommitmentItem.title;
+      const commTitleLower = commTitle.toLowerCase();
+      const commStartM = parseTimeToMins(matchingCommitmentItem.start_time.split('T')[1].slice(0, 5));
+      const commEndM = parseTimeToMins(matchingCommitmentItem.end_time.split('T')[1].slice(0, 5));
+
+      // Find return commute / travel block after commitment
+      const returnCommuteIdx = updated.items.findIndex((it) => {
+        const itTitle = (it.title || '').toLowerCase();
+        return (
+          itTitle.includes(`transition: ${commTitleLower}`) ||
+          itTitle.includes(`buffer after ${commTitleLower}`) ||
+          (itTitle.includes(`travel: ${commTitleLower}`) && parseTimeToMins(it.start_time.split('T')[1].slice(0, 5)) >= commEndM)
+        );
+      });
+
+      const commuteAfterDur =
+        returnCommuteIdx >= 0
+          ? Math.max(
+              15,
+              Math.round(
+                (new Date(updated.items[returnCommuteIdx].end_time).getTime() -
+                  new Date(updated.items[returnCommuteIdx].start_time).getTime()) /
+                  60000
+              )
+            )
+          : 30;
+
+      if (isEarlyArrival && statedTimeMins !== null && !isAllDayCancellation) {
+        // User got home at statedTimeMins (e.g. 15:00 = 3 PM)
+        const adjustedFinishMins = Math.max(commStartM + 30, statedTimeMins - commuteAfterDur);
+        matchingCommitmentItem.end_time = isoTime(
           targetDateObj,
           Math.floor(adjustedFinishMins / 60),
           adjustedFinishMins % 60
         );
-        updated.items[returnCommuteIdx].end_time = isoTime(
-          targetDateObj,
-          Math.floor(statedTimeMins / 60),
-          statedTimeMins % 60
-        );
+
         what_changed.push(
-          `Moved return commute for "${commTitle}" to ${formatTime24(adjustedFinishMins)} – ${formatTime24(statedTimeMins)}.`
+          `Shortened "${commTitle}" on ${targetDayName} to end at ${formatTime24(adjustedFinishMins)} due to early departure.`
         );
-      }
-      freedTimeSlotStart = statedTimeMins;
-    } else if (isCancelled) {
-      // Full cancellation: remove commitment and its travel/buffer blocks
-      updated.items = updated.items.filter((item) => {
-        if (item.id === matchingCommitmentItem.id) return false;
-        const iTitle = (item.title || '').toLowerCase();
-        if (
-          iTitle === `travel: ${commTitleLower}` ||
-          iTitle === `transition: ${commTitleLower}` ||
-          iTitle === `buffer after ${commTitleLower}`
-        ) {
-          return false;
+
+        if (returnCommuteIdx >= 0) {
+          updated.items[returnCommuteIdx].start_time = isoTime(
+            targetDateObj,
+            Math.floor(adjustedFinishMins / 60),
+            adjustedFinishMins % 60
+          );
+          updated.items[returnCommuteIdx].end_time = isoTime(
+            targetDateObj,
+            Math.floor(statedTimeMins / 60),
+            statedTimeMins % 60
+          );
+          what_changed.push(
+            `Moved return commute for "${commTitle}" to ${formatTime24(adjustedFinishMins)} – ${formatTime24(statedTimeMins)}.`
+          );
         }
-        return true;
-      });
-      what_changed.push(`Removed cancelled "${commTitle}" (and associated travel/buffer) on ${targetDayName}.`);
-      if (freedTimeSlotStart === null) {
-        freedTimeSlotStart = commStartM;
+        freedTimeSlotStart = statedTimeMins;
+      } else if (isCancelled) {
+        // Full cancellation: remove commitment and its travel/buffer blocks
+        updated.items = updated.items.filter((item) => {
+          if (item.id === matchingCommitmentItem.id) return false;
+          const iTitle = (item.title || '').toLowerCase();
+          if (
+            iTitle === `travel: ${commTitleLower}` ||
+            iTitle === `transition: ${commTitleLower}` ||
+            iTitle === `buffer after ${commTitleLower}`
+          ) {
+            return false;
+          }
+          return true;
+        });
+        cancelledCommitmentTitles.add(commTitleLower);
+        if (matchedSpecificTask) {
+          const mstLower = (matchedSpecificTask.title || matchedSpecificTask.name || '').toLowerCase();
+          if (mstLower === commTitleLower || commTitleLower.includes(mstLower) || mstLower.includes(commTitleLower)) {
+            matchedSpecificTask = null;
+          }
+        }
+        what_changed.push(`Removed cancelled "${commTitle}" (and associated travel/buffer) on ${targetDayName}.`);
+        if (freedTimeSlotStart === null) {
+          freedTimeSlotStart = commStartM;
+        }
       }
     }
   }
+
+  const isExcludedTask = (t) => {
+    if (!t) return true;
+    const tL = (t.title || t.name || '').toLowerCase();
+    return cancelledTerms.has(tL) || cancelledCommitmentTitles.has(tL);
+  };
 
   // -------------------------------------------------------------
   // BRANCH 2: BROAD PRODUCTIVITY REQUEST -> CONTEXTUAL OPTIONS
@@ -2565,6 +3406,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
     // Option 1: Urgent task with approaching deadline
     const urgentCandidate = (tasks || []).find((t) => {
       if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
+      if (isExcludedTask(t)) return false;
       return Boolean(t.deadline);
     });
     if (urgentCandidate) {
@@ -2581,6 +3423,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
     const studyCandidate = (tasks || []).find((t) => {
       if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
       if (urgentCandidate && t.id === urgentCandidate.id) return false;
+      if (isExcludedTask(t)) return false;
       return t.priority >= 3 || t.tier === 'have_to' || t.tier === 'need_to';
     });
     if (studyCandidate) {
@@ -2598,6 +3441,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
       if (t.is_fixed || t.done || scheduledTitles.has((t.title || '').toLowerCase())) return false;
       if (urgentCandidate && t.id === urgentCandidate.id) return false;
       if (studyCandidate && t.id === studyCandidate.id) return false;
+      if (isExcludedTask(t)) return false;
       return true;
     });
     if (flexibleCandidate) {
@@ -2630,9 +3474,34 @@ export async function proposeDisruption(text, date, selectedOption = null) {
 
   // -------------------------------------------------------------
   // BRANCH 3: FEASIBILITY CHECK & SCHEDULING
+  // Pure cancellations check for genuine pending backlog tasks.
+  // Never invent tasks or schedule excluded/cancelled commitments.
   // -------------------------------------------------------------
-  const effectiveStartMins = freedTimeSlotStart !== null ? freedTimeSlotStart : 900;
+  const scheduledTitles = new Set(updated.items.map((it) => (it.title || '').toLowerCase()));
+  const genuineCandidates = (tasks || []).filter((t) => {
+    if (t.is_fixed || t.done) return false;
+    const tLower = (t.title || t.name || '').toLowerCase();
+    if (scheduledTitles.has(tLower)) return false;
+    if (isExcludedTask(t)) return false;
+    return true;
+  });
+
+  const shouldScheduleForCancellation = isCancelled && !wantsProductive && !matchedSpecificTask && !selectedOption && genuineCandidates.length > 0;
+  const needsScheduling = wantsProductive || !!matchedSpecificTask || !!selectedOption || isEarlyArrival || isDelayed || shouldScheduleForCancellation;
+  let chosenSlotStart = null;
+  let chosenSlotEnd = null;
+  let taskTitle = '';
+  let isFlexibleBlock = false;
+
+  const effectiveStartMins = freedTimeSlotStart !== null ? freedTimeSlotStart : (isAllDayCancellation ? wakeMins : 900);
   const availableBeforeSleep = Math.max(0, latestWorkTime - effectiveStartMins);
+
+  if (isCancelled && !needsScheduling) {
+    what_changed.push('No pending backlog tasks require attention — suggested keeping this newly freed time free for rest and recharge.');
+    what_changed.push('Approve to apply this plan and clear cancelled commitments, or discard to keep previous day.');
+  }
+
+  if (needsScheduling) {
 
   if (effectiveStartMins >= latestWorkTime || availableBeforeSleep < 30) {
     const conflictMsg = `Stated time (${formatMinsFriendly(effectiveStartMins)}) leaves insufficient time before wind-down (${formatMinsFriendly(latestWorkTime)}).`;
@@ -2681,9 +3550,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
 
   // Determine task to schedule
   let taskToSchedule = null;
-  let taskTitle = '';
   let taskDuration = Math.min(availableBeforeSleep, Number(preferences.focus_length) || 90);
-  let isFlexibleBlock = false;
 
   if (selectedOption && selectedOption.task) {
     taskToSchedule = selectedOption.task;
@@ -2714,22 +3581,39 @@ export async function proposeDisruption(text, date, selectedOption = null) {
         );
       }
     }
-  } else if (wantsProductive || isCancelled || isEarlyArrival) {
-    const scheduledTitles = new Set(updated.items.map((it) => (it.title || '').toLowerCase()));
-    const candidates = (tasks || []).filter((t) => {
+  } else if (wantsProductive || isEarlyArrival || (isCancelled && genuineCandidates.length > 0)) {
+    const candidates = genuineCandidates.length > 0 ? genuineCandidates : (tasks || []).filter((t) => {
       if (t.is_fixed || t.done) return false;
       const tLower = (t.title || t.name || '').toLowerCase();
       if (scheduledTitles.has(tLower)) return false;
+      if (isExcludedTask(t)) return false;
       return true;
     });
 
     if (candidates.length > 0) {
-      candidates.sort((a, b) => (b.priority || 3) - (a.priority || 3));
+      candidates.sort((a, b) => {
+        const aDl = a.deadline ? new Date(a.deadline.includes('T') ? a.deadline : a.deadline + 'T23:59:00').getTime() : Infinity;
+        const bDl = b.deadline ? new Date(b.deadline.includes('T') ? b.deadline : b.deadline + 'T23:59:00').getTime() : Infinity;
+        if (aDl !== bDl) return aDl - bDl;
+
+        const tierScore = (t) => (t.tier === 'have_to' ? 3 : t.tier === 'need_to' ? 2 : 1);
+        const aScore = (a.priority || 3) + tierScore(a);
+        const bScore = (b.priority || 3) + tierScore(b);
+        if (bScore !== aScore) return bScore - aScore;
+
+        const aMeta = inferTaskMeta(a);
+        const bMeta = inferTaskMeta(b);
+        if (aMeta.preferredTime === preferences.best_time_of_day && bMeta.preferredTime !== preferences.best_time_of_day) return -1;
+        if (bMeta.preferredTime === preferences.best_time_of_day && aMeta.preferredTime !== preferences.best_time_of_day) return 1;
+
+        return 0;
+      });
+
       taskToSchedule = candidates[0];
       taskTitle = taskToSchedule.title || taskToSchedule.name;
       const dur = Number(taskToSchedule.duration || taskToSchedule.estimated_duration || 60);
-      taskDuration = Math.min(availableBeforeSleep, Math.min(dur, 90));
-    } else {
+      taskDuration = Math.min(availableBeforeSleep, Math.min(dur, Number(preferences.focus_length) || 90));
+    } else if (!isCancelled) {
       taskTitle = 'Flexible Focus Block';
       isFlexibleBlock = true;
       taskDuration = Math.min(availableBeforeSleep, Math.min(Number(preferences.focus_length) || 90, 90));
@@ -2747,9 +3631,9 @@ export async function proposeDisruption(text, date, selectedOption = null) {
     }))
     .sort((a, b) => a.start - b.start);
 
-  let chosenSlotStart = null;
-  let chosenSlotEnd = null;
-  let ptr = effectiveStartMins;
+    chosenSlotStart = null;
+    chosenSlotEnd = null;
+    let ptr = effectiveStartMins;
 
   for (const b of busyIntervals) {
     if (b.end <= ptr) continue;
@@ -2798,6 +3682,19 @@ export async function proposeDisruption(text, date, selectedOption = null) {
       `Scheduled ${isFlexibleBlock ? 'Flexible Focus Block' : `"${taskTitle}"`} (${formatTime24(chosenSlotStart)} – ${formatTime24(chosenSlotEnd)}).`
     );
 
+    if (isCancelled && taskToSchedule) {
+      const whyDetail = taskToSchedule.deadline
+        ? `approaching deadline (${taskToSchedule.deadline.split('T')[0]})`
+        : `priority ${taskToSchedule.priority || 3} and focus rhythm`;
+      what_changed.push(
+        `Suggested new flow: Reallocated freed time to backlog task "${taskTitle}" based on ${whyDetail}.`
+      );
+      what_changed.push(
+        'Applied learned preference: Scheduled in morning peak focus window (85% historical completion rhythm).'
+      );
+      what_changed.push('Approve to apply this plan, or discard to keep previous day.');
+    }
+
     // 15-min Recovery Buffer
     const bufferEnd = chosenSlotEnd + 15;
     const nextBusy = busyIntervals.find((b) => b.start >= chosenSlotEnd);
@@ -2823,6 +3720,7 @@ export async function proposeDisruption(text, date, selectedOption = null) {
       what_changed.push('Added a 15-min recovery buffer to recharge after focus time.');
     }
   }
+}
 
   // Rebuild Open Blocks for any remaining free intervals >= 45m
   updated.items.sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime());
@@ -2884,6 +3782,8 @@ export async function proposeDisruption(text, date, selectedOption = null) {
     summary = `Adjusted ${targetDayName}: cancelled commitments opened slot for ${taskTitle} at ${formatTime24(chosenSlotStart)}`;
   } else if (chosenSlotStart !== null) {
     summary = `Scheduled ${taskTitle} at ${formatTime24(chosenSlotStart)} on ${targetDayName}`;
+  } else if (isCancelled) {
+    summary = `Adjusted ${targetDayName}: removed cancelled commitments`;
   }
 
   const proposalId = uid();

@@ -6,6 +6,9 @@
  *
  * Interface contract:
  *   parseTaskSemantics(note, taskContext) -> {
+ *     title: string | null,
+ *     clean_title: string | null,
+ *     deadline: string | null,
  *     estimated_duration: number | null,
  *     frequency: string | null,
  *     split_preference: boolean | null,
@@ -74,10 +77,147 @@ function parseWordNumber(str) {
   return map[str.toLowerCase()] || null;
 }
 
+const MONTH_NAMES = {
+  jan: 1, january: 1,
+  feb: 2, february: 2,
+  mar: 3, march: 3,
+  apr: 4, april: 4,
+  may: 5,
+  jun: 6, june: 6,
+  jul: 7, july: 7,
+  aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9,
+  oct: 10, october: 10,
+  nov: 11, november: 11,
+  dec: 12, december: 12,
+};
+
+function formatIsoLocalEndOfDay(year, month, day) {
+  const y = String(year).padStart(4, '0');
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${y}-${m}-${d}T23:59:00`;
+}
+
+/**
+ * Parses explicit deadline dates from natural language text.
+ * Context-aware: default year comes from refDate or current context (2026).
+ */
+export function parseDeadline(text, refDate = new Date()) {
+  if (!text || typeof text !== 'string') return null;
+  const lower = text.toLowerCase();
+
+  // Pattern A: "<day>(st|nd|rd|th)? of <month>" or "by <day>(st|nd|rd|th)? (of )?<month>"
+  const dayOfMonthMatch = lower.match(/(?:due\s+(?:on|by\s+the|by)?\s*|by\s+)?\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/);
+  if (dayOfMonthMatch && dayOfMonthMatch[1] && dayOfMonthMatch[2]) {
+    const day = parseInt(dayOfMonthMatch[1], 10);
+    const month = MONTH_NAMES[dayOfMonthMatch[2]];
+    if (month && day >= 1 && day <= 31) {
+      const year = refDate.getFullYear() || 2026;
+      return formatIsoLocalEndOfDay(year, month, day);
+    }
+  }
+
+  // Pattern B: "due (on|by)? <month> <day>(st|nd|rd|th)?" or "<month> <day>(st|nd|rd|th)?"
+  // e.g. "due on oct 29", "october 29th", "by nov 5"
+  const monthDayMatch = lower.match(/(?:due\s+(?:on|by\s+the|by)?\s*|by\s+)?\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/);
+  if (monthDayMatch && monthDayMatch[1] && monthDayMatch[2]) {
+    const month = MONTH_NAMES[monthDayMatch[1]];
+    const day = parseInt(monthDayMatch[2], 10);
+    if (month && day >= 1 && day <= 31) {
+      const year = refDate.getFullYear() || 2026;
+      return formatIsoLocalEndOfDay(year, month, day);
+    }
+  }
+
+  // Pattern C: "due tomorrow"
+  if (/\bdue\s+tomorrow\b/.test(lower)) {
+    const d = new Date(refDate);
+    d.setDate(d.getDate() + 1);
+    return formatIsoLocalEndOfDay(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
+
+  // Pattern D: "due in X days"
+  const inDaysMatch = lower.match(/\bdue\s+in\s+(\d+|two|three|four)\s+days\b/);
+  if (inDaysMatch) {
+    const count = parseWordNumber(inDaysMatch[1]) || 1;
+    const d = new Date(refDate);
+    d.setDate(d.getDate() + count);
+    return formatIsoLocalEndOfDay(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
+
+  // Pattern E: "due (on )?<dayOfWeek>"
+  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  for (let i = 0; i < 7; i++) {
+    const re = new RegExp(`\\bdue\\s+(?:on\\s+)?${dayNames[i]}\\b`, 'i');
+    if (re.test(lower)) {
+      const nowDay = refDate.getDay();
+      let diff = i - nowDay;
+      if (diff <= 0) diff += 7;
+      const d = new Date(refDate);
+      d.setDate(d.getDate() + diff);
+      return formatIsoLocalEndOfDay(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extracts a clean task title from natural language text by stripping out
+ * clauses describing deadlines, durations, recurrence, and priorities.
+ */
+export function extractCleanTitle(rawText) {
+  if (!rawText || typeof rawText !== 'string') return '';
+  let text = rawText.trim();
+
+  // Strip deadline clauses:
+  // e.g. "due on oct 29", "due tomorrow", "due friday", "by 15th of nov", "by oct 29"
+  text = text.replace(/\b(?:due\s+(?:on|by\s+the|by)?\s*|by\s+)?\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/gi, '');
+  text = text.replace(/\b(?:due\s+(?:on|by\s+the|by)?\s*|by\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?\b/gi, '');
+  text = text.replace(/\bdue\s+tomorrow\b/gi, '');
+  text = text.replace(/\bdue\s+in\s+(\d+|two|three|four)\s+days\b/gi, '');
+  text = text.replace(/\bdue\s+(?:on\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/gi, '');
+
+  // Strip duration clauses:
+  // e.g. "needs 60 mins to complete", "needs 60 mins", "takes 2 hours", "60 mins", "2 hrs"
+  text = text.replace(/\b(?:needs?|takes?|requires?|for)\s+\d+(?:\.\d+)?\s*(?:hours?|hrs?|h|minutes?|mins?|m)\s*(?:to\s*complete|to\s*finish)?\b/gi, '');
+  text = text.replace(/\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\s*(?:to\s*complete|to\s*finish)?\b/gi, '');
+
+  // Strip priority clauses:
+  // e.g. "Need To", "Should Do", "Like To", "high priority", "urgent"
+  text = text.replace(/\b(?:need\s*to|must\s*(?:do|finish)?|have\s*to|urgent|high\s*priority|top\s*priority)\b/gi, '');
+  text = text.replace(/\b(?:should\s*do|should|medium\s*priority|normal\s*priority)\b/gi, '');
+  text = text.replace(/\b(?:like\s*to|hobby|low\s*priority|optional)\b/gi, '');
+
+  // Clean trailing/leading and orphaned punctuation, dots, dashes, and extra spaces
+  text = text.replace(/\s+[.;,–—\-]+(?=\s|$)/g, ' ');
+  text = text
+    .replace(/[.;,–—\-]+$/g, '')
+    .replace(/^[.;,–—\-]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // If after stripping clauses we got empty or too short, fallback to first clause before punctuation
+  if (!text) {
+    const parts = rawText.split(/[,;\-–\n.]/);
+    if (parts.length > 0 && parts[0].trim().length > 0) {
+      text = parts[0].trim();
+    } else {
+      text = rawText.trim();
+    }
+  }
+
+  return text;
+}
+
 export function parseTaskSemantics(note, taskContext = {}) {
   if (!note || typeof note !== 'string' || !note.trim()) {
     return {
       isEmpty: true,
+      title: null,
+      clean_title: null,
+      deadline: null,
       estimated_duration: null,
       frequency: null,
       split_preference: null,
@@ -349,8 +489,14 @@ export function parseTaskSemantics(note, taskContext = {}) {
   const taskType = isExplicitRecurring ? 'growth' : 'deadline';
   const priority = tier === 'have_to' ? 5 : tier === 'need_to' ? 3 : 1;
 
+  const parsedDeadline = parseDeadline(note, taskContext.refDate || new Date());
+  const cleanTitle = extractCleanTitle(note);
+
   return {
     isEmpty: false,
+    title: cleanTitle || null,
+    clean_title: cleanTitle || null,
+    deadline: parsedDeadline,
     tier: tier,
     priority: priority,
     task_type: taskType,

@@ -38,6 +38,7 @@ class PlanTask:
     remaining_minutes: int
     priority: int = 3                      # 1-5
     deadline: Optional[datetime] = None
+    must_daily: bool = False
 
 
 @dataclass
@@ -48,6 +49,8 @@ class Prefs:
     allow_splitting: bool = True
     no_study_after: Optional[time] = None  # hard limit for the demo
     daily_cap_minutes: int = 480
+    morning_routine_minutes: int = 0       # morning routine / wake buffer
+    wind_down_minutes: int = 0             # wind-down before bedtime
 
 
 @dataclass
@@ -78,10 +81,12 @@ def _ceil5(dt: datetime) -> datetime:
 
 
 def _window(day: date, prefs: Prefs) -> Tuple[datetime, datetime]:
-    start = datetime.combine(day, prefs.wake)
-    end = datetime.combine(day, prefs.sleep)
+    m_buf = getattr(prefs, "morning_routine_minutes", 0) or 0
+    w_buf = getattr(prefs, "wind_down_minutes", 0) or 0
+    start = datetime.combine(day, prefs.wake) + timedelta(minutes=m_buf)
+    end = datetime.combine(day, prefs.sleep) - timedelta(minutes=w_buf)
     if end <= start:                        # sleep is after midnight
-        end += timedelta(days=1)
+        end = datetime.combine(day + timedelta(days=1), prefs.sleep) - timedelta(minutes=w_buf)
     if prefs.no_study_after is not None:
         end = min(end, datetime.combine(day, prefs.no_study_after))
     return start, end
@@ -110,7 +115,11 @@ def _free_for_day(day: date, prefs: Prefs, fixed: List[FixedBlock], now: datetim
         a = max(a, _ceil5(now))
     free = [(a, b)] if a < b else []
     for blk in fixed:
-        free = _subtract(free, blk.start - _pad(blk), blk.end + _pad(blk))
+        pad = _pad(blk)
+        blk_start = blk.start - pad
+        blk_end = blk.end + pad
+        if blk_start < b and blk_end > a:
+            free = _subtract(free, blk_start, blk_end)
     return free
 
 
@@ -167,8 +176,51 @@ def generate_plan(
     min_chunk = max(MIN_CHUNK_FLOOR, prefs.focus_duration // 3)
     result = PlanResult()
 
+    # Pre-calculate fixed commitment load on each day to adjust sustainable daily cap
+    day_effective_caps = {}
+    for d in days:
+        base_cap = day_caps.get(d, prefs.daily_cap_minutes)
+        w_start, w_end = _window(d, prefs)
+        w_total = max(0, _mins(w_end - w_start))
+        fixed_mins = 0
+        for blk in fixed:
+            pad = _pad(blk)
+            b_s = max(w_start, blk.start - pad)
+            b_e = min(w_end, blk.end + pad)
+            if b_e > b_s:
+                fixed_mins += _mins(b_e - b_s)
+        # Protect buffer against heavy fixed commitments (>= 180 mins)
+        if fixed_mins >= 180:
+            sustainable_margin = max(60, w_total - fixed_mins - 60)
+            day_effective_caps[d] = min(base_cap, sustainable_margin)
+        else:
+            day_effective_caps[d] = base_cap
+
+    # 1. Schedule must_daily tasks across each day
+    daily_tasks = [t for t in tasks if getattr(t, "must_daily", False)]
+    for task in daily_tasks:
+        for day in days:
+            cap = day_effective_caps[day]
+            cap_left = cap - used[day]
+            if cap_left < MIN_CHUNK_FLOOR:
+                continue
+            dur = min(task.remaining_minutes, cap_left, prefs.focus_duration)
+            if dur < min_chunk and dur < task.remaining_minutes:
+                continue
+            slot = _best_slot(free[day], dur, min(min_chunk, dur), None)
+            if slot is not None:
+                a, b = slot
+                chunk = min(dur, _mins(b - a))
+                if chunk >= MIN_CHUNK_FLOOR or chunk == dur:
+                    end = a + timedelta(minutes=chunk)
+                    result.placements.append(Placement(task.id, task.title, a, end))
+                    free[day] = _subtract(free[day], a, end + TRANSITION_BUFFER)
+                    used[day] += chunk
+
+    # 2. Schedule non-daily tasks paced across days
+    non_daily_tasks = [t for t in tasks if not getattr(t, "must_daily", False)]
     ordered = sorted(
-        tasks,
+        non_daily_tasks,
         key=lambda t: (-urgency(t, today), t.deadline or datetime.max),
     )
 
@@ -180,17 +232,24 @@ def generate_plan(
         for day in days:
             if day > last_day or remaining <= 0:
                 break
-            cap = day_caps.get(day, prefs.daily_cap_minutes)
+            cap = day_effective_caps[day]
 
             while remaining > 0:
                 cap_left = cap - used[day]
+                if cap_left <= 0:
+                    break
+
+                is_deadline_day = (day == last_day)
+
                 if prefs.allow_splitting:
                     need = min(min_chunk, remaining)
-                    want = min(remaining, prefs.focus_duration, cap_left)
+                    max_today = remaining if is_deadline_day else min(remaining, prefs.focus_duration)
+                    want = min(max_today, prefs.focus_duration, cap_left)
                 else:
                     need = remaining
                     want = min(remaining, cap_left)
-                if cap_left <= 0 or need > cap_left:
+
+                if cap_left <= 0 or need > cap_left or want < need:
                     break
 
                 slot = _best_slot(free[day], want, need, task.deadline)
@@ -203,7 +262,7 @@ def generate_plan(
                 # Avoid leaving a tiny leftover fragment behind
                 left = remaining - chunk
                 if prefs.allow_splitting and 0 < left < min_chunk:
-                    if length >= remaining and cap_left >= remaining:
+                    if length >= remaining and cap_left >= remaining and (is_deadline_day or remaining <= prefs.focus_duration):
                         chunk = remaining
                     elif chunk - (min_chunk - left) >= need:
                         chunk = chunk - (min_chunk - left)
@@ -213,6 +272,10 @@ def generate_plan(
                 free[day] = _subtract(free[day], a, end + TRANSITION_BUFFER)
                 used[day] += chunk
                 remaining -= chunk
+
+                # If this is not the deadline day, pace by moving to next day after placing a session
+                if not is_deadline_day:
+                    break
 
         if remaining > 0:
             result.at_risk[task.id] = remaining
@@ -246,7 +309,8 @@ def validate_plan(
         if p.start < a or p.end > b:
             problems.append(f"{label}: outside allowed hours")
         for blk in fixed:
-            if p.start < blk.end + _pad(blk) and p.end > blk.start - _pad(blk):
+            pad = _pad(blk)
+            if p.start < blk.end + pad and p.end > blk.start - pad:
                 problems.append(f"{label}: clashes with {blk.title}")
         t = tasks_by_id.get(p.task_id)
         if t is not None and t.deadline is not None and p.end > t.deadline:
