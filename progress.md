@@ -632,3 +632,91 @@ Fixed defect in the Quick Add flow (`frontend/src/pages/Tasks.jsx` and `frontend
 - Commit made: no (awaiting user authorization).
 - Diff reviewed: yes.
 - Handoff updated: yes.
+
+## 2026-10-24 — Adaptive Scheduling & Week View Disappearing Task Repair
+
+**Product requirement advanced:**
+Repaired end-to-end adaptive scheduling ("Something changed" flow) across the FastAPI backend and React frontend. Fixed life cycle defects where:
+1. Day format parsing (`_parse_days_pattern`) failed on common patterns (`"Daily"`, `"Every day"`, `"Weekdays"`, `"Mon-Fri"`, and comma-separated lists), causing fixed commitments to be ignored by the scheduler.
+2. `update_preferences` failed to sync `Task(is_fixed=True)` rows with updated preferences.
+3. `refresh_fixed_commitments` was missing `db.flush()`, causing unflushed task rows to be invisible when `autoflush=False`.
+4. Adaptive disruption handling in `propose_schedule` did not adjust `effective_fixed` or daily load caps for cancellations, early arrivals, or rest requests.
+5. Proposal validation and approval checked against static database fixed commitments instead of `effective_fixed`, producing false 422 collision errors.
+6. `approve_proposal` did not sync cancelled/shortened fixed commitments to the database, and `get_week_spread` re-expanded static weekly templates and filtered with `if has_collision: continue`, causing newly scheduled study tasks to disappear from the Week view.
+
+**Defect resolution details:**
+- `backend/app/core/deps.py`: Updated `HTTPBearer(auto_error=False)` and added explicit 401 Unauthorized raise when credentials are missing, passing `test_unauthenticated_requests_return_401`.
+- `backend/app/api/routes/preferences.py`:
+  - Extended `_parse_days_pattern()` to parse `"Daily"`, `"Every day"`, `"Weekdays"`, `"Weekends"`, `"Mon-Fri"`, abbreviations, and comma-separated lists.
+  - Updated `update_preferences()` to invoke `refresh_fixed_commitments()` on commitment updates.
+  - Added `db.flush()` at the end of `refresh_fixed_commitments()`.
+  - Updated `_upsert_fixed_commitments()` to preserve `status == "cancelled"` records across refreshes.
+- `backend/app/api/routes/schedules.py`:
+  - In `_load()`, excluded `cancelled` tasks (`(~Task.status.in_(["completed", "done", "cancelled"]))`).
+  - In `propose_schedule()`, implemented deterministic disruption handling for cancellations, early arrivals / shortenings, and rest requests; built `effective_fixed` and serialized it into `displaced_json`.
+  - In `get_proposal()` and `approve_proposal()`, validated against `effective_fixed` rather than raw database `fixed`.
+  - In `approve_proposal()`, synchronized approved fixed commitment cancellations and shortenings into `Task(is_fixed=True)` rows (`status = "cancelled"` and updated duration/deadline).
+  - In `get_week_spread()`, loaded `cancelled_fixed_keys` and skipped cancelled commitments from both display anchors and `day_fixed_blocks` collision checks, ensuring Week view and Today view agree completely without dropping tasks.
+- `backend/app/api/routes/tasks.py`:
+  - Removed duplicate `@router.delete("/{task_id}")` decorator.
+- `backend/tests/test_scheduler_integration.py`:
+  - Added end-to-end regression tests:
+    - `test_adaptive_cancellation_opens_time_and_approves_cleanly`
+    - `test_early_arrival_shortens_commitment_and_places_productive_work`
+    - `test_urgent_task_insertion_minimal_change_and_displacement`
+    - `test_insufficient_capacity_marks_unplaced_work_at_risk_without_violating_invariants`
+    - `test_task_duration_change_and_completed_work_preservation`
+
+**Files changed in this batch:**
+- `backend/app/core/deps.py`
+- `backend/app/api/routes/preferences.py`
+- `backend/app/api/routes/schedules.py`
+- `backend/app/api/routes/tasks.py`
+- `backend/tests/test_scheduler_integration.py`
+- `ORBIT_HANDOFF.md`
+- `progress.md`
+
+**Verification:**
+- Full backend pytest suite (`python -m pytest -q` from `backend/`): **115 passed, 0 failed** in 94.84s.
+- Full frontend test suite (`npm test` from `frontend/`): **66 passed (8 suites), 0 failed** in 26.34s.
+- Production build (`npm run build` from `frontend/`): **Clean build in 3.31s** (0 errors).
+- Real browser E2E execution (`orbit_browser_e2e`): Verified complete flow from navigation, Tasks quick-add parsing, 7-day Week spread, "Something changed" proposal creation and approval, and persistence in Today/Week views with 0 console errors.
+- `git diff --check`: Clean (0 errors, 0 trailing whitespace).
+
+**Git status:**
+- Commit made: no (awaiting user authorization).
+- Diff reviewed: yes.
+- Handoff updated: yes.
+
+---
+
+## 2026-10-24 — Changed Page UX Enhancement & Live Verification
+
+**Context & User Concern:**
+The user visited `http://localhost:5173/changed` and asked to verify if it was working properly.
+
+**Root Cause Analysis:**
+1. **Below-the-fold proposal rendering without auto-scroll:** The header, prominent yellow input card, and four suggestion cards take up ~600px of height. On standard laptop viewports (e.g. 1536x730), when the user clicked "Reorganise plan" or clicked a suggestion card, the proposal card rendered off-screen below the fold. Without automatic scrolling, the button stopped spinning and the screen appeared unchanged, leading the user to believe the feature was not functioning.
+2. **Missing Enter-key submission on textarea:** Users naturally press `Enter` after typing their prompt. Previously, `<textarea>` inserted a newline rather than submitting.
+3. **Missing concrete schedule placements:** The proposal card previously only showed plain bullet points of what changed and at-risk items, but omitted the concrete proposed day timeline/placements that students need to see before approving.
+
+**Changes Implemented:**
+- `frontend/src/pages/Changed.jsx`:
+  - Added `formatTime()` helper.
+  - Added `chatFlowRef` and `proposalRef` with `useEffect` auto-scroll hooks to smoothly bring the generated proposal card into view immediately upon submission.
+  - Added `onKeyDown` to the `<textarea>` to submit on `Enter` (without Shift), plus a visible helper hint (`Press Enter ↵ or click to adapt`).
+  - Added an interactive banner (`✨ Active plan proposal ready to review below ↓`) at the top of the input card if a user scrolls back up while reviewing a proposal.
+  - Added the `Proposed Schedule Placements` timeline section into the proposal card, showing each day's planned time blocks, task titles, and badges (`Fixed`, `Focus`, `Buffer`, `Open`).
+- `frontend/src/pages/Changed.css`:
+  - Added styles for the active proposal pill, submission hint, schedule preview container, day cards, slot pills, and kind badges conforming to the pop neo-brutalist theme.
+
+**Verification:**
+- Full frontend test suite (`npm test`): **66 passed (8 suites), 0 failed** in 25.72s.
+- Production build (`npm run build`): **Clean build in 1.65s** (0 errors).
+- Live browser subagent verification (`verify_changed_ux_flow`):
+  - Navigated to `http://localhost:5173/changed`.
+  - Typed "My afternoon class was cancelled today" and pressed `Enter`.
+  - Verified automatic form submission and smooth scroll directly to the proposal card.
+  - Verified proposed schedule placements timeline with all time slots and badges.
+  - Verified scrolling up shows the active proposal pill.
+  - Clicked "Approve plan" and verified clean update and navigation to `/today`.

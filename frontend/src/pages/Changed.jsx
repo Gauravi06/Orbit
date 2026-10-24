@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   ArrowRight,
@@ -13,6 +13,7 @@ import {
   Clock,
   Compass,
   Zap,
+  Calendar,
 } from 'lucide-react';
 import {
   proposeDisruption,
@@ -21,6 +22,15 @@ import {
   errText,
 } from '../api/client';
 import './Changed.css';
+
+function formatTime(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  if (isNaN(d.getTime())) {
+    return isoStr;
+  }
+  return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true });
+}
 
 const SUGGESTIONS = [
   {
@@ -66,6 +76,23 @@ export function Changed() {
   const [clarifyAnswer, setClarifyAnswer] = useState('');
 
   const navigate = useNavigate();
+  const chatFlowRef = useRef(null);
+  const proposalRef = useRef(null);
+
+  // Auto-scroll when adapting or when proposal / choices arrive
+  useEffect(() => {
+    if (loading || choiceData || clarificationData) {
+      chatFlowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [loading, choiceData, clarificationData]);
+
+  useEffect(() => {
+    if (proposal) {
+      setTimeout(() => {
+        proposalRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 50);
+    }
+  }, [proposal]);
 
   const handleDisrupt = async (textToSubmit) => {
     if (loading || approving || discarding) return;
@@ -248,6 +275,17 @@ export function Changed() {
           </span>
         </div>
 
+        {proposal && (
+          <button
+            type="button"
+            className="changed-active-proposal-pill"
+            onClick={() => proposalRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          >
+            <Sparkles size={13} strokeWidth={2.5} />
+            <span>Active plan proposal ready to review below ↓</span>
+          </button>
+        )}
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -261,12 +299,21 @@ export function Changed() {
               placeholder="e.g. My afternoon lab got cancelled, or I'm exhausted and need to stop early tonight…"
               value={promptText}
               onChange={(e) => setPromptText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleDisrupt();
+                }
+              }}
               disabled={loading}
               rows={3}
             />
           </div>
 
           <div className="changed-input-actions">
+            <span className="changed-submit-hint">
+              Press <strong>Enter ↵</strong> or click to adapt
+            </span>
             <button
               type="submit"
               className="changed-submit-btn"
@@ -318,7 +365,7 @@ export function Changed() {
       </div>
 
       {/* Inline Conversation & Flow Section */}
-      <div className="changed-chat-flow">
+      <div ref={chatFlowRef} className="changed-chat-flow">
         {/* User Message in Pink Bubble */}
         {submittedPrompt && (
           <div className="changed-user-bubble">
@@ -416,7 +463,7 @@ export function Changed() {
 
         {/* Schedule Proposal Card with Approve & Reject Actions */}
         {proposal && (
-          <div className="changed-proposal-card" role="region" aria-label="Proposed Plan">
+          <div ref={proposalRef} className="changed-proposal-card" role="region" aria-label="Proposed Plan">
             <div className="changed-proposal-header">
               <div className="changed-proposal-headline-wrap">
                 <span className="changed-proposal-badge">
@@ -453,6 +500,48 @@ export function Changed() {
                     </span>
                   </div>
                 ))}
+              </div>
+            )}
+
+            {/* Proposed Schedule Slots Timeline */}
+            {proposal.days && proposal.days.length > 0 && (
+              <div className="changed-schedule-preview">
+                <div className="changed-schedule-preview-header">
+                  <Calendar size={15} strokeWidth={2.5} />
+                  <span>Proposed Schedule Placements</span>
+                </div>
+                <div className="changed-schedule-days">
+                  {proposal.days.map((day, dIdx) => {
+                    const activeSlots = (day.items || []).filter((it) => it.status !== 'displaced');
+                    return (
+                      <div key={dIdx} className="changed-day-card">
+                        <div className="changed-day-date-badge">{day.date}</div>
+                        <div className="changed-day-slots">
+                          {activeSlots.map((slot, sIdx) => {
+                            const isFocus = slot.kind === 'deep' || slot.kind === 'task';
+                            const isBuffer = slot.kind === 'break' || slot.kind === 'decompression';
+                            const isOpen = slot.kind === 'open';
+                            return (
+                              <div
+                                key={slot.id || sIdx}
+                                className={`changed-slot-pill ${slot.is_fixed ? 'is-fixed' : isFocus ? 'is-focus' : isBuffer ? 'is-buffer' : isOpen ? 'is-open' : 'is-default'}`}
+                              >
+                                <span className="changed-slot-time">
+                                  {formatTime(slot.start_time)} – {formatTime(slot.end_time)}
+                                </span>
+                                <span className="changed-slot-name">{slot.title}</span>
+                                {slot.is_fixed && <span className="changed-slot-badge">Fixed</span>}
+                                {isFocus && <span className="changed-slot-badge badge-focus">Focus</span>}
+                                {isBuffer && <span className="changed-slot-badge badge-buffer">Buffer</span>}
+                                {isOpen && <span className="changed-slot-badge badge-open">Open</span>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 

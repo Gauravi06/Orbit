@@ -808,3 +808,171 @@
   cursor: not-allowed;
   transform: none;
 }
+
+/* --------------------------------------------------------------------------
+   Submit Hint & Active Proposal Pill
+   -------------------------------------------------------------------------- */
+.changed-submit-hint {
+  font-size: 12px;
+  font-weight: 600;
+  color: #333333;
+}
+
+.changed-submit-hint strong {
+  color: #111111;
+}
+
+.changed-active-proposal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  padding: 8px 14px;
+  background: #FFFFFF;
+  color: #111111;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-pill, 999px);
+  box-shadow: 2.5px 2.5px 0 #111111;
+  font-family: var(--pop-font-body, 'DM Sans', sans-serif);
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.changed-active-proposal-pill:hover {
+  transform: translate(-1px, -1px);
+  box-shadow: 4px 4px 0 #111111;
+  background: #FFFDF0;
+}
+
+/* --------------------------------------------------------------------------
+   6. Proposed Schedule Placements Preview
+   -------------------------------------------------------------------------- */
+.changed-schedule-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #FAFAFA;
+  border: 2.5px solid #111111;
+  border-radius: var(--pop-radius-sm, 12px);
+  padding: 14px 16px;
+  box-shadow: 3px 3px 0 #111111;
+}
+
+.changed-schedule-preview-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--pop-font-heading, 'Archivo Black', sans-serif);
+  font-size: 13px;
+  font-weight: 900;
+  color: #111111;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.changed-schedule-days {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.changed-day-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #FFFFFF;
+  border: 2px solid #111111;
+  border-radius: var(--pop-radius-sm, 10px);
+  padding: 12px 14px;
+}
+
+.changed-day-date-badge {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 2px 8px;
+  background: #111111;
+  color: #FFFFFF;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.changed-day-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.changed-slot-pill {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1.5px solid #111111;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  background: #FFFFFF;
+  box-shadow: 1.5px 1.5px 0 #111111;
+}
+
+.changed-slot-pill.is-fixed {
+  background: #F3F4F6;
+  color: #4B5563;
+}
+
+.changed-slot-pill.is-focus {
+  background: #FFF9DB;
+  border-left: 5px solid #FFE066;
+}
+
+.changed-slot-pill.is-buffer {
+  background: #F3E8FF;
+  border-left: 5px solid #B79CFF;
+}
+
+.changed-slot-pill.is-open {
+  background: #F4FCE3;
+  border-left: 5px solid #B8F34A;
+}
+
+.changed-slot-time {
+  font-size: 12px;
+  font-weight: 700;
+  color: #444444;
+  white-space: nowrap;
+}
+
+.changed-slot-name {
+  flex: 1;
+  font-weight: 700;
+  color: #111111;
+}
+
+.changed-slot-badge {
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid #111111;
+  background: #EEEEEE;
+  color: #111111;
+}
+
+.changed-slot-badge.badge-focus {
+  background: #FFE066;
+}
+
+.changed-slot-badge.badge-buffer {
+  background: #B79CFF;
+  color: #FFFFFF;
+}
+
+.changed-slot-badge.badge-open {
+  background: #B8F34A;
+}

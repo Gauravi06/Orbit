@@ -570,6 +570,317 @@ class TestSchedulerIntegration(unittest.TestCase):
         self.assertEqual(res_app_again.status_code, 400)
         self.assertIn("already approved", res_app_again.json()["detail"])
 
+    def test_adaptive_cancellation_opens_time_and_approves_cleanly(self):
+        """
+        Verify adaptive scheduling when fixed commitment is cancelled:
+        1. Fixed commitment (College 09:00-15:00) initially blocks morning/early afternoon.
+        2. 'College cancelled today. Home the entire day.' opens that slot in proposal.
+        3. Pending task is scheduled into the newly available time.
+        4. Explicit approval persists without violations or 422 errors.
+        5. Today and Week view agree completely on the scheduled items.
+        """
+        tuesday_dt = datetime(2026, 10, 13, 8, 30)  # Tuesday 08:30
+        onboarding_data = {
+            "wake_time": "08:30",
+            "sleep_time": "23:30",
+            "week_structure": "different_weekdays",
+            "fixed_commitments": [
+                {
+                    "name": "College Lectures",
+                    "days": "Tuesday",
+                    "start_time": "09:00",
+                    "end_time": "15:00",
+                    "commute_before": 20,
+                    "commute_after": 20,
+                }
+            ],
+            "need_to_items": [
+                {"title": "DBMS Assignment", "estimated_duration": 180, "priority": 5}
+            ],
+        }
+
+        with patch("app.api.routes.schedules._now", return_value=tuesday_dt):
+            r_onb = self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+            self.assertEqual(r_onb.status_code, 200)
+
+            # Generate initial plan: DBMS Assignment must be scheduled AFTER 15:00 + commute (15:25)
+            r_gen = self.client.post("/schedules/generate", headers=self.headers_a)
+            self.assertEqual(r_gen.status_code, 200)
+            day0_items = r_gen.json()["days"][0]["items"]
+            self.assertTrue(day0_items)
+            dbms_initial = next(i for i in day0_items if i["title"] == "DBMS Assignment")
+            s_init = datetime.fromisoformat(dbms_initial["start_time"])
+            self.assertGreaterEqual(s_init.time(), time(15, 20))
+
+            # Adaptive proposal: 'College cancelled today. Home the entire day.'
+            r_prop = self.client.post(
+                "/schedules/propose",
+                json={"text": "College cancelled today. Home the entire day."},
+                headers=self.headers_a,
+            )
+            self.assertEqual(r_prop.status_code, 200)
+            prop = r_prop.json()
+            prop_id = prop["proposal_id"]
+            self.assertEqual(prop["status"], "pending")
+            self.assertEqual(prop["violations"], [])
+
+            # what_changed must explain the cancellation
+            what_changed_str = " ".join(prop["what_changed"]).lower()
+            self.assertTrue(
+                "cancelled" in what_changed_str or "college" in what_changed_str,
+                f"what_changed must mention cancelled college: {prop['what_changed']}",
+            )
+
+            # In the proposal, DBMS Assignment should now be scheduled in newly opened morning slot!
+            prop_day0_items = prop["days"][0]["items"]
+            dbms_prop = next(i for i in prop_day0_items if i["title"] == "DBMS Assignment")
+            s_prop = datetime.fromisoformat(dbms_prop["start_time"])
+            self.assertLess(s_prop.time(), time(12, 0), "DBMS Assignment should be scheduled in newly opened morning hours")
+
+            # Active schedule must remain UNCHANGED before approval
+            r_active = self.client.get("/schedules", headers=self.headers_a)
+            active_dbms = next(i for i in r_active.json()["days"][0]["items"] if i["title"] == "DBMS Assignment")
+            self.assertEqual(active_dbms["start_time"], dbms_initial["start_time"])
+
+            # Explicit approval applies proposal
+            r_app = self.client.post(f"/schedules/proposals/{prop_id}/approve", headers=self.headers_a)
+            self.assertEqual(r_app.status_code, 200, r_app.text)
+            self.assertEqual(r_app.json()["status"], "approved")
+
+            # Verify Today view has the new placement
+            r_today = self.client.get("/schedules", headers=self.headers_a)
+            today_items = r_today.json()["days"][0]["items"]
+            approved_dbms = next(i for i in today_items if i["title"] == "DBMS Assignment")
+            self.assertEqual(approved_dbms["start_time"], dbms_prop["start_time"])
+
+            # Verify Week view matches Today view and does NOT drop the task
+            r_week = self.client.get(f"/schedules/week?date={tuesday_dt.date().isoformat()}", headers=self.headers_a)
+            self.assertEqual(r_week.status_code, 200)
+            week_day = next(d for d in r_week.json()["days"] if d["date"] == tuesday_dt.date().isoformat())
+            week_task_titles = [i["title"] for i in week_day["items"] if not i.get("is_fixed")]
+            self.assertIn("DBMS Assignment", week_task_titles, "Week view must NOT drop the scheduled task")
+
+    def test_early_arrival_shortens_commitment_and_places_productive_work(self):
+        """
+        Verify early arrival adaptation:
+        'Got back home at 3 on Tuesday since lectures were cancelled, feel like doing something productive.'
+        Shortens commitment to free time starting at 3 PM, schedules productive focus work at/after 3 PM.
+        """
+        tuesday_dt = datetime(2026, 10, 13, 15, 0) # Tuesday 15:00
+        onboarding_data = {
+            "wake_time": "07:00",
+            "sleep_time": "23:30",
+            "fixed_commitments": [
+                {
+                    "name": "College Lectures",
+                    "days": "Tuesday",
+                    "start_time": "09:00",
+                    "end_time": "17:00",
+                    "commute_before": 20,
+                    "commute_after": 20,
+                }
+            ],
+            "need_to_items": [
+                {"title": "Algorithms Practice", "estimated_duration": 90, "priority": 5}
+            ],
+        }
+
+        with patch("app.api.routes.schedules._now", return_value=tuesday_dt):
+            self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+            self.client.post("/schedules/generate", headers=self.headers_a)
+
+            r_prop = self.client.post(
+                "/schedules/propose",
+                json={"text": "Got back home at 3 on Tuesday since lectures were cancelled, feel like doing something productive."},
+                headers=self.headers_a,
+            )
+            self.assertEqual(r_prop.status_code, 200)
+            prop = r_prop.json()
+            self.assertEqual(prop["violations"], [])
+
+            # Productive session scheduled at or after 3:00 PM (15:00)
+            day0_items = prop["days"][0]["items"]
+            algo_item = next((i for i in day0_items if i["title"] == "Algorithms Practice"), None)
+            self.assertIsNotNone(algo_item, "Algorithms Practice must be placed in proposal")
+            s_time = datetime.fromisoformat(algo_item["start_time"])
+            self.assertGreaterEqual(s_time.time(), time(15, 0), "Productive session must start at or after 3 PM")
+
+            # Approving activates cleanly without errors
+            r_app = self.client.post(f"/schedules/proposals/{prop['proposal_id']}/approve", headers=self.headers_a)
+            self.assertEqual(r_app.status_code, 200)
+
+    def test_urgent_task_insertion_minimal_change_and_displacement(self):
+        """
+        Verify urgent task insertion:
+        1. Existing active schedule with lower-priority tasks.
+        2. New high-priority urgent task with imminent deadline arrives.
+        3. Proposing schedule does not mutate active schedule before approval.
+        4. Proposal places urgent task at earliest valid window and tracks displacement reasons.
+        5. Approval activates plan cleanly.
+        """
+        sunday_dt = datetime(2026, 10, 11, 7, 0)
+        onboarding_data = {
+            "wake_time": "07:00",
+            "sleep_time": "22:00",
+            "focus_duration": 60,
+            "daily_cap_minutes": 240,
+            "fixed_commitments": [],
+            "need_to_items": [
+                {"title": "Low Priority Reading", "estimated_duration": 120, "priority": 2}
+            ],
+        }
+
+        with patch("app.api.routes.schedules._now", return_value=sunday_dt):
+            self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+            r_init = self.client.post("/schedules/generate", headers=self.headers_a)
+            self.assertEqual(r_init.status_code, 200)
+
+            # Insert an urgent high-priority assignment with a near deadline
+            r_urgent = self.client.post(
+                "/tasks",
+                json={
+                    "title": "Urgent Security Vulnerability Report",
+                    "estimated_duration": 120,
+                    "priority": 5,
+                    "task_type": "deadline",
+                    "deadline": (sunday_dt + timedelta(hours=8)).isoformat(),
+                },
+                headers=self.headers_a,
+            )
+            self.assertEqual(r_urgent.status_code, 201)
+
+            # Propose schedule
+            r_prop = self.client.post("/schedules/propose", headers=self.headers_a)
+            self.assertEqual(r_prop.status_code, 200)
+            prop = r_prop.json()
+            self.assertEqual(prop["violations"], [])
+
+            # Active schedule must still be untouched before approval
+            r_active = self.client.get("/schedules", headers=self.headers_a)
+            active_titles = [i["title"] for i in r_active.json()["days"][0]["items"]]
+            self.assertNotIn("Urgent Security Vulnerability Report", active_titles)
+
+            # In proposal, urgent task is placed before its deadline
+            prop_items = prop["days"][0]["items"]
+            urgent_p = next((i for i in prop_items if i["title"] == "Urgent Security Vulnerability Report"), None)
+            self.assertIsNotNone(urgent_p)
+            s_time = datetime.fromisoformat(urgent_p["start_time"])
+            e_time = datetime.fromisoformat(urgent_p["end_time"])
+            self.assertLessEqual(e_time, sunday_dt.replace(tzinfo=IST) + timedelta(hours=8))
+
+            # Approve proposal
+            r_app = self.client.post(f"/schedules/proposals/{prop['proposal_id']}/approve", headers=self.headers_a)
+            self.assertEqual(r_app.status_code, 200)
+
+            # After approval, urgent task is now active
+            r_active_after = self.client.get("/schedules", headers=self.headers_a)
+            after_titles = [i["title"] for i in r_active_after.json()["days"][0]["items"]]
+            self.assertIn("Urgent Security Vulnerability Report", after_titles)
+
+    def test_insufficient_capacity_marks_unplaced_work_at_risk_without_violating_invariants(self):
+        """
+        Verify insufficient capacity handling:
+        When tasks exceed available hours before deadline:
+        - Scheduler places work up to capacity without violating bedtime.
+        - Clearly identifies remaining unplaced work in at_risk.
+        - Never fills beyond the daily cap merely to appear complete.
+        """
+        sunday_dt = datetime(2026, 10, 11, 7, 0)
+        onboarding_data = {
+            "wake_time": "07:00",
+            "sleep_time": "12:00",  # Only 5 hours available today (07:00 - 12:00 = 300 mins)
+            "focus_duration": 60,
+            "daily_cap_minutes": 180,  # Cap at 3 hours
+            "fixed_commitments": [],
+            "need_to_items": [
+                {"title": "Massive Project", "estimated_duration": 480, "priority": 5}  # 8 hours!
+            ],
+        }
+
+        with patch("app.api.routes.schedules._now", return_value=sunday_dt):
+            self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+            res = self.client.post("/schedules/generate", headers=self.headers_a)
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+
+            # No violations: bedtime (12:00) is strictly respected
+            self.assertEqual(data["violations"], [])
+            day0_items = data["days"][0]["items"]
+            for item in day0_items:
+                e_time = datetime.fromisoformat(item["end_time"])
+                self.assertLessEqual(e_time.time(), time(12, 0))
+
+            # Total placed minutes today cannot exceed daily cap (180 mins)
+            day0_mins = sum(
+                int((datetime.fromisoformat(i["end_time"]) - datetime.fromisoformat(i["start_time"])).total_seconds() / 60)
+                for i in day0_items
+            )
+            self.assertLessEqual(day0_mins, 180)
+
+    def test_task_duration_change_and_completed_work_preservation(self):
+        """
+        Verify preservation of completed work:
+        1. Task is created and scheduled.
+        2. User marks task as completed.
+        3. Subsequent schedule generation excludes the completed task and never reschedules it.
+        4. Updating duration of an active task adjusts future scheduled duration.
+        """
+        sunday_dt = datetime(2026, 10, 11, 7, 0)
+        onboarding_data = {
+            "wake_time": "07:00",
+            "sleep_time": "22:00",
+            "focus_duration": 60,
+            "daily_cap_minutes": 360,
+            "fixed_commitments": [],
+            "need_to_items": [
+                {"title": "Assignment Alpha", "estimated_duration": 60, "priority": 4},
+                {"title": "Assignment Beta", "estimated_duration": 60, "priority": 4},
+            ],
+        }
+
+        with patch("app.api.routes.schedules._now", return_value=sunday_dt):
+            self.client.post("/onboarding", json=onboarding_data, headers=self.headers_a)
+            r_gen1 = self.client.post("/schedules/generate", headers=self.headers_a)
+            self.assertEqual(r_gen1.status_code, 200)
+
+            # Fetch tasks and mark Assignment Alpha as completed
+            r_tasks = self.client.get("/tasks", headers=self.headers_a)
+            tasks = r_tasks.json()
+            alpha = next(t for t in tasks if t["title"] == "Assignment Alpha")
+            beta = next(t for t in tasks if t["title"] == "Assignment Beta")
+
+            r_patch = self.client.patch(
+                f"/tasks/{alpha['id']}",
+                json={"status": "completed"},
+                headers=self.headers_a,
+            )
+            self.assertEqual(r_patch.status_code, 200)
+
+            # Update Assignment Beta duration from 60 to 120 minutes
+            r_patch_beta = self.client.patch(
+                f"/tasks/{beta['id']}",
+                json={"estimated_duration": 120},
+                headers=self.headers_a,
+            )
+            self.assertEqual(r_patch_beta.status_code, 200)
+
+            # Regenerate schedule
+            r_gen2 = self.client.post("/schedules/generate", headers=self.headers_a)
+            self.assertEqual(r_gen2.status_code, 200)
+            data2 = r_gen2.json()
+
+            # Assignment Alpha must NOT be rescheduled as unfinished work
+            all_titles_after = [i["title"] for d in data2["days"] for i in d["items"]]
+            self.assertNotIn("Assignment Alpha", all_titles_after)
+
+            # Assignment Beta total scheduled duration must now equal 120 minutes
+            beta_items = [i for d in data2["days"] for i in d["items"] if i["title"] == "Assignment Beta"]
+            total_beta_mins = sum(
+                int((datetime.fromisoformat(i["end_time"]) - datetime.fromisoformat(i["start_time"])).total_seconds() / 60)
+                for i in beta_items
+            )
+            self.assertEqual(total_beta_mins, 120)
+
 
 if __name__ == "__main__":
     unittest.main()

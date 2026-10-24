@@ -235,7 +235,11 @@ def update_preferences(
     current_user: User = Depends(get_current_user),
 ):
     data = payload.model_dump(exclude_unset=True)
-    return save_user_preferences_dict(db, current_user, data, source="preferences")
+    res = save_user_preferences_dict(db, current_user, data, source="preferences")
+    if "fixed_commitments" in data:
+        refresh_fixed_commitments(db, current_user)
+        db.commit()
+    return res
 
 
 @router.post("/onboarding", response_model=Dict[str, Any], status_code=status.HTTP_200_OK)
@@ -367,9 +371,18 @@ _WEEKDAY_NAMES: List[str] = [
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"
 ]
 
+_WEEKDAY_MAP: Dict[str, int] = {
+    "monday": 0, "mon": 0,
+    "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+    "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6,
+}
+
 _MON_FRI_NAMES: frozenset = frozenset(["monday", "tuesday", "wednesday", "thursday", "friday"])
 
-# Normalise an en-dash or regular hyphen in "Monday–Friday" / "Monday-Friday"
 def _parse_days_pattern(days_raw: str) -> List[int]:
     """
     Return a list of weekday integers (0=Mon … 6=Sun) from the onboarding
@@ -377,32 +390,53 @@ def _parse_days_pattern(days_raw: str) -> List[int]:
 
     Recognised patterns
     -------------------
-    "Monday–Friday" or "Monday-Friday"  →  [0,1,2,3,4]
-    Any single weekday name             →  [weekday_index]
+    "Daily" / "Every day" / "Everyday"  →  [0, 1, 2, 3, 4, 5, 6]
+    "Weekdays"                          →  [0, 1, 2, 3, 4]
+    "Weekends"                          →  [5, 6]
+    "Monday–Friday" or "Monday-Friday"  →  [0, 1, 2, 3, 4]
+    "Mon-Fri"                           →  [0, 1, 2, 3, 4]
+    "Mon, Wed, Fri"                     →  [0, 2, 4]
+    Any single weekday name/abbr        →  [weekday_index]
     Anything else                       →  [] (caller skips the commitment)
     """
     if not days_raw:
         return []
 
     s = days_raw.strip().replace("\u2013", "-").replace("\u2014", "-")
+    lower = s.lower()
 
-    # Range like "Monday-Friday"
+    if lower in ("daily", "everyday", "every day", "all week", "all days", "every_day"):
+        return [0, 1, 2, 3, 4, 5, 6]
+
+    if lower in ("weekdays", "weekday", "mon-fri", "same_weekdays"):
+        return [0, 1, 2, 3, 4]
+
+    if lower in ("weekends", "weekend", "sat-sun"):
+        return [5, 6]
+
+    # Comma-separated list like "Mon, Wed, Fri" or "Monday, Wednesday"
+    if "," in s:
+        found = set()
+        for part in s.split(","):
+            p = part.strip().lower()
+            if p in _WEEKDAY_MAP:
+                found.add(_WEEKDAY_MAP[p])
+        if found:
+            return sorted(list(found))
+
+    # Range like "Monday-Friday" or "Mon-Fri"
     if "-" in s:
         parts = [p.strip().lower() for p in s.split("-", 1)]
         if len(parts) == 2:
-            try:
-                start_idx = _WEEKDAY_NAMES.index(parts[0])
-                end_idx = _WEEKDAY_NAMES.index(parts[1])
-                if start_idx <= end_idx:
-                    return list(range(start_idx, end_idx + 1))
-            except ValueError:
-                pass
+            start_idx = _WEEKDAY_MAP.get(parts[0])
+            end_idx = _WEEKDAY_MAP.get(parts[1])
+            if start_idx is not None and end_idx is not None and start_idx <= end_idx:
+                return list(range(start_idx, end_idx + 1))
         return []
 
-    # Single weekday name
-    lower = s.lower()
-    if lower in _WEEKDAY_NAMES:
-        return [_WEEKDAY_NAMES.index(lower)]
+    # Single weekday name or abbreviation
+    if lower in _WEEKDAY_MAP:
+        return [_WEEKDAY_MAP[lower]]
 
     return []
 
@@ -507,6 +541,7 @@ def refresh_fixed_commitments(
     # 3. Upsert configured fixed commitments
     if stored.get("fixed_commitments"):
         _upsert_fixed_commitments(db, user, stored, now=now)
+    db.flush()
 
 
 def _upsert_fixed_commitments(
@@ -588,6 +623,8 @@ def _upsert_fixed_commitments(
                 None,
             )
             if existing:
+                if existing.status == "cancelled":
+                    continue
                 existing.estimated_duration = duration_minutes
                 existing.commute_minutes = commute
                 existing.deadline = start_dt

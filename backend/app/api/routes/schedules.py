@@ -1,9 +1,10 @@
 import hashlib
 import json
+import re
 import uuid
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -72,6 +73,41 @@ def _aware(dt: Optional[datetime]) -> Optional[datetime]:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=IST)
     return dt.astimezone(IST)
+
+
+_DAY_NAMES: List[str] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+
+def _parse_early_arrival(text: str) -> Optional[Tuple[int, int]]:
+    m = re.search(
+        r'(?:got\s+back(?:\s+home)?|back\s+home|got\s+home|arrived(?:\s+home)?|home\s+at)\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?',
+        text,
+        re.I,
+    )
+    if m:
+        h = int(m.group(1))
+        mins = int(m.group(2) or 0)
+        meridiem = (m.group(3) or '').lower()
+        if meridiem == 'pm' and h < 12:
+            h += 12
+        elif meridiem == 'am' and h == 12:
+            h = 0
+        elif not meridiem and 1 <= h <= 6:
+            h += 12
+        return h, mins
+    return None
+
+
+def _resolve_target_date(text: str, base_dt: datetime) -> date:
+    lower = text.lower()
+    if 'tomorrow' in lower:
+        return base_dt.date() + timedelta(days=1)
+    for i, name in enumerate(_DAY_NAMES):
+        if re.search(r'\b' + name + r'\b', lower) or re.search(r'\b' + name[:3] + r'\b', lower):
+            base_w = base_dt.weekday()
+            diff = (i - base_w) % 7
+            return base_dt.date() + timedelta(days=diff)
+    return base_dt.date()
 
 
 # ---------------------------------------------------------------- serialization helpers
@@ -143,7 +179,7 @@ def _deserialize_placements(placements_json: str) -> List[Placement]:
     ]
 
 
-def _serialize_displaced(displaced: dict) -> str:
+def _serialize_displaced(displaced: dict, effective_fixed: Optional[List[FixedBlock]] = None) -> str:
     out = []
     for (tid, s, e), (by, reason, old_s) in displaced.items():
         out.append({
@@ -154,6 +190,17 @@ def _serialize_displaced(displaced: dict) -> str:
             "reason": reason,
             "old_start": old_s.isoformat() if old_s else None,
         })
+    if effective_fixed is not None:
+        fixed_out = [
+            {
+                "title": f.title,
+                "start": f.start.isoformat(),
+                "end": f.end.isoformat(),
+                "commute": f.commute_minutes,
+            }
+            for f in effective_fixed
+        ]
+        return json.dumps({"displaced": out, "effective_fixed": fixed_out})
     return json.dumps(out)
 
 
@@ -162,7 +209,8 @@ def _deserialize_displaced(displaced_json: Optional[str]) -> dict:
         return {}
     out = {}
     try:
-        items = json.loads(displaced_json)
+        data = json.loads(displaced_json)
+        items = data.get("displaced", []) if isinstance(data, dict) else data
         for i in items:
             key = (i["task_id"], datetime.fromisoformat(i["start"]), datetime.fromisoformat(i["end"]))
             old_s = datetime.fromisoformat(i["old_start"]) if i.get("old_start") else None
@@ -170,6 +218,27 @@ def _deserialize_displaced(displaced_json: Optional[str]) -> dict:
     except Exception:
         return {}
     return out
+
+
+def _deserialize_effective_fixed(displaced_json: Optional[str]) -> Optional[List[FixedBlock]]:
+    if not displaced_json:
+        return None
+    try:
+        data = json.loads(displaced_json)
+        if isinstance(data, dict) and "effective_fixed" in data:
+            fixed_data = data["effective_fixed"]
+            return [
+                FixedBlock(
+                    f["title"],
+                    datetime.fromisoformat(f["start"]),
+                    datetime.fromisoformat(f["end"]),
+                    int(f.get("commute") or 0),
+                )
+                for f in fixed_data
+            ]
+    except Exception:
+        return None
+    return None
 
 
 # ---------------------------------------------------------------- load inputs
@@ -183,7 +252,7 @@ def _load(db: Session, user: User):
         db.query(Task)
         .filter(
             Task.user_id == user.id,
-            (Task.status.is_(None)) | (~Task.status.in_(["completed", "done"])),
+            (Task.status.is_(None)) | (~Task.status.in_(["completed", "done", "cancelled"])),
         )
         .all()
     )
@@ -565,23 +634,81 @@ def propose_schedule(
 ):
     now = _now()
     horizon = HORIZON
+    refresh_fixed_commitments(db, current_user, now)
     prefs = load_user_rule_prefs(db, current_user)
     fixed, tasks = _load(db, current_user)
 
     blocks: List[FixedBlock] = []
     caps: Dict[date, int] = {}
     text = ""
+    adaptation_notes: List[str] = []
+    effective_fixed = list(fixed)
+
     if payload:
+        target_d = None
         if payload.date:
             try:
                 target_d = datetime.strptime(payload.date, "%Y-%m-%d").date()
-                if target_d > now.date():
-                    now = datetime.combine(target_d, prefs.wake)
             except ValueError:
-                pass
+                target_d = None
+
         candidate_text = f"{payload.text or ''} {payload.selected_option or ''}".strip()
         if candidate_text:
             text = candidate_text
+            lower_text = text.lower()
+            if target_d is None:
+                target_d = _resolve_target_date(text, now)
+
+            if target_d > now.date():
+                now = datetime.combine(target_d, prefs.wake)
+
+            # Check for cancellation of fixed commitments
+            is_cancelled = any(w in lower_text for w in [
+                "cancel", "cancelled", "canceled", "called off", "calling off",
+                "no lecture", "no lectures", "no class", "no classes", "no college", "no lab", "no meeting"
+            ])
+            early_arr = _parse_early_arrival(text)
+
+            is_rest = any(w in lower_text for w in [
+                "exhaust", "tired", "drained", "burnout", "sick", "need rest", "unwell", "lighten", "too much"
+            ])
+
+            if is_rest:
+                caps[target_d] = min(caps.get(target_d, 60), 60)
+                adaptation_notes.append(f"Lightened schedule for {target_d.strftime('%A, %b %d')} to protect your recovery time.")
+
+            if is_cancelled:
+                new_effective = []
+                for fb in effective_fixed:
+                    if fb.start.date() == target_d:
+                        is_match = any(
+                            term in fb.title.lower()
+                            for term in ["college", "lecture", "class", "course", "lab", "rotation", "seminar", "meeting"]
+                        ) or fb.title.lower() in lower_text
+                        if is_match:
+                            if early_arr is not None:
+                                arr_h, arr_m = early_arr
+                                arr_time = datetime.combine(target_d, time(arr_h, arr_m))
+                                new_end = arr_time - timedelta(minutes=fb.commute_minutes)
+                                if new_end > fb.start:
+                                    new_effective.append(FixedBlock(fb.title, fb.start, new_end, fb.commute_minutes))
+                                    adaptation_notes.append(
+                                        f"Shortened \"{fb.title}\" on {target_d.strftime('%A')} so your time is open starting at {arr_time.strftime('%I:%M %p').lstrip('0')}."
+                                    )
+                                else:
+                                    adaptation_notes.append(
+                                        f"Cancelled \"{fb.title}\" on {target_d.strftime('%A')} based on your update."
+                                    )
+                                continue
+                            else:
+                                adaptation_notes.append(
+                                    f"Cancelled \"{fb.title}\" on {target_d.strftime('%A')} to open newly available study time."
+                                )
+                                continue
+                    new_effective.append(fb)
+                effective_fixed = new_effective
+
+            # Also attempt AI disruption parsing if Gemini is configured/available
             try:
                 parsed_blocks, parsed_caps = parse_disruption(text, now)
                 blocks.extend([FixedBlock(b["label"], _naive(b["start"]), _naive(b["end"]), 0) for b in parsed_blocks])
@@ -589,6 +716,7 @@ def propose_schedule(
                     caps[c["day"]] = c["max_minutes"]
             except Exception:
                 pass
+
         if payload.blocks:
             blocks.extend([FixedBlock(b.label, _naive(b.start), _naive(b.end), 0) for b in payload.blocks])
         if payload.caps:
@@ -596,8 +724,8 @@ def propose_schedule(
                 caps[c.day] = c.max_minutes
 
     task_hash = _compute_task_hash(prefs, tasks, fixed)
-    result = generate_plan(tasks, fixed + blocks, prefs, now, horizon, caps)
-    problems = validate_plan(result.placements, {t.id: t for t in tasks}, fixed + blocks, prefs, now)
+    result = generate_plan(tasks, effective_fixed + blocks, prefs, now, horizon, caps)
+    problems = validate_plan(result.placements, {t.id: t for t in tasks}, effective_fixed + blocks, prefs, now)
 
     # current future items for displacement comparison without mutating
     before = [
@@ -613,6 +741,12 @@ def propose_schedule(
     ]
     displaced = _diff(before, result.placements, blocks)
     what_changed: List[str] = []
+
+    # Insert adaptation notes first
+    for note in adaptation_notes:
+        if note not in what_changed:
+            what_changed.append(note)
+
     if text and displaced:
         keys = list(displaced)
         phrased = phrase_reasons([displaced[k][1] for k in keys], text)
@@ -654,7 +788,7 @@ def propose_schedule(
         placements_json=_serialize_placements(result.placements),
         at_risk_json=json.dumps(at_risk_list),
         violations_json=json.dumps(problems),
-        displaced_json=_serialize_displaced(displaced),
+        displaced_json=_serialize_displaced(displaced, effective_fixed),
         created_at=datetime.now(timezone.utc),
         expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
     )
@@ -663,7 +797,7 @@ def propose_schedule(
     db.refresh(proposal)
 
     titles = {str(t.id): t.title for t in db.query(Task).filter(Task.user_id == current_user.id).all()}
-    days_data = _format_placements_days(now, horizon, result.placements, fixed + blocks, titles, displaced)
+    days_data = _format_placements_days(now, horizon, result.placements, effective_fixed + blocks, titles, displaced)
 
     return {
         "proposal_id": proposal.id,
@@ -719,8 +853,10 @@ def get_proposal(
     placements = _deserialize_placements(proposal.placements_json)
     fixed, _ = _load(db, current_user)
     displaced = _deserialize_displaced(proposal.displaced_json)
+    effective_fixed = _deserialize_effective_fixed(proposal.displaced_json)
+    use_fixed = effective_fixed if effective_fixed is not None else fixed
     titles = {str(t.id): t.title for t in db.query(Task).filter(Task.user_id == current_user.id).all()}
-    days_data = _format_placements_days(proposal.planning_now, HORIZON, placements, fixed, titles, displaced)
+    days_data = _format_placements_days(proposal.planning_now, HORIZON, placements, use_fixed, titles, displaced)
 
     what_changed: List[str] = []
     for (_, reason, _) in displaced.values():
@@ -789,13 +925,15 @@ def approve_proposal(
             detail="Schedule inputs (tasks, fixed commitments, or preferences) have changed since this proposal was created. Proposal is stale.",
         )
 
-    # Check validity of placements
+    # Check validity of placements against effective fixed blocks for this proposal
     planning_cutoff = _naive(proposal.planning_now)
     placements = _deserialize_placements(proposal.placements_json)
+    effective_fixed = _deserialize_effective_fixed(proposal.displaced_json)
+    use_fixed = effective_fixed if effective_fixed is not None else fixed
     problems = validate_plan(
         placements,
         {t.id: t for t in tasks},
-        fixed,
+        use_fixed,
         prefs,
         planning_cutoff,
     )
@@ -821,6 +959,34 @@ def approve_proposal(
     # Persist the EXACT proposed placements
     displaced = _deserialize_displaced(proposal.displaced_json)
     _save_placements(db, current_user, placements, now, displaced, HORIZON)
+
+    # Synchronize approved fixed commitment adjustments (cancellations or shortenings)
+    if effective_fixed is not None:
+        db_fixed_tasks = (
+            db.query(Task)
+            .filter(
+                Task.user_id == current_user.id,
+                Task.is_fixed.is_(True),
+                Task.deadline.isnot(None),
+            )
+            .all()
+        )
+        eff_map = {
+            (fb.title.lower(), fb.start.date()): fb
+            for fb in effective_fixed
+        }
+        for ft in db_fixed_tasks:
+            ft_date = _naive(ft.deadline).date()
+            if planning_cutoff.date() <= ft_date <= planning_cutoff.date() + timedelta(days=HORIZON):
+                key = (ft.title.lower(), ft_date)
+                if key not in eff_map:
+                    ft.status = "cancelled"
+                else:
+                    fb = eff_map[key]
+                    ft.estimated_duration = int((fb.end - fb.start).total_seconds() / 60)
+                    ft.commute_minutes = fb.commute_minutes
+                    ft.deadline = _aware(fb.start)
+
     proposal.status = "approved"
     db.commit()
 
@@ -892,6 +1058,7 @@ def get_week_spread(
     current_user: User = Depends(get_current_user),
 ):
     now_dt = _now()
+    refresh_fixed_commitments(db, current_user, now_dt)
     if date:
         try:
             base_date = datetime.strptime(date, "%Y-%m-%d").date()
@@ -922,6 +1089,16 @@ def get_week_spread(
     fixed, _ = _load(db, current_user)
     prefs_dict = get_user_preferences_dict(db, current_user)
 
+    cancelled_fixed_keys = {
+        (t.title.lower(), _naive(t.deadline).date())
+        for t in db.query(Task).filter(
+            Task.user_id == current_user.id,
+            Task.is_fixed.is_(True),
+            Task.status == "cancelled",
+        ).all()
+        if t.deadline
+    }
+
     days_data = []
     total_deep_mins = 0
     total_rest_mins = 0
@@ -937,6 +1114,8 @@ def get_week_spread(
         seen_fixed_titles = set()
         for b in fixed:
             if b.start.date() == d:
+                if (b.title.lower(), d) in cancelled_fixed_keys:
+                    continue
                 existing_fixed_keys.add((b.title.lower(), b.start.hour, b.start.minute))
                 seen_fixed_titles.add(b.title.lower())
                 day_items.append({
@@ -956,7 +1135,7 @@ def get_week_spread(
             if not isinstance(fc, dict):
                 continue
             fc_name = (fc.get("name") or fc.get("title") or "").strip()
-            if not fc_name or fc_name.lower() in seen_fixed_titles:
+            if not fc_name or fc_name.lower() in seen_fixed_titles or (fc_name.lower(), d) in cancelled_fixed_keys:
                 continue
             weekdays = _parse_days_pattern(str(fc.get("days") or ""))
             if d.weekday() not in weekdays:
@@ -987,13 +1166,13 @@ def get_week_spread(
                 continue
 
         # Build day fixed blocks for conflict checking
-        day_fixed_blocks = [b for b in fixed if b.start.date() == d]
+        day_fixed_blocks = [b for b in fixed if b.start.date() == d and (b.title.lower(), d) not in cancelled_fixed_keys]
         task_based_keys = {(b.title.lower(), b.start.hour, b.start.minute) for b in day_fixed_blocks}
         for fc in (prefs_dict.get("fixed_commitments") or []):
             if not isinstance(fc, dict):
                 continue
             fc_name = (fc.get("name") or fc.get("title") or "").strip()
-            if not fc_name:
+            if not fc_name or (fc_name.lower(), d) in cancelled_fixed_keys:
                 continue
             weekdays = _parse_days_pattern(str(fc.get("days") or ""))
             if d.weekday() not in weekdays:
