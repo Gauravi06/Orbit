@@ -28,8 +28,6 @@ import './Week.css';
 import { formatTime12 } from '../utils/timeFormat';
 
 /* Helper functions for formatting times & durations */
-const pad = (n) => String(n).padStart(2, '0');
-
 function formatTime(isoStr) {
   return formatTime12(isoStr);
 }
@@ -86,11 +84,14 @@ export function Week() {
           setData(res);
           // If selectedDayDate is not in the loaded week days, select today or first day
           if (res?.days?.length > 0) {
-            const hasSelected = res.days.some((d) => d.date === selectedDayDate);
-            if (!hasSelected) {
-              const hasToday = res.days.find((d) => d.date === todayStr);
-              setSelectedDayDate(hasToday ? todayStr : res.days[0].date);
-            }
+            setSelectedDayDate((prev) => {
+              const hasSelected = res.days.some((d) => d.date === prev);
+              if (!hasSelected) {
+                const hasToday = res.days.find((d) => d.date === todayStr);
+                return hasToday ? todayStr : res.days[0].date;
+              }
+              return prev;
+            });
           }
         }
       } catch (err) {
@@ -152,8 +153,8 @@ export function Week() {
     setIsModalOpen(false);
   };
 
-  const days = data?.days || [];
-  const groups = data?.groups || [];
+  const days = useMemo(() => data?.days || [], [data?.days]);
+  const groups = useMemo(() => data?.groups || [], [data?.groups]);
 
   // DEMO ONLY: set to false to show real calculated values
   const DEMO_MODE = true;

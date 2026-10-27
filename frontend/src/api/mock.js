@@ -8,7 +8,7 @@
  * Shape contracts match the FastAPI backend exactly.
  */
 
-import { parseTaskSemantics, parseDeadline, extractCleanTitle } from './semanticParser.js';
+import { parseTaskSemantics } from './semanticParser.js';
 export { parseTaskSemantics, parseTaskSemanticsAsync, parseDeadline, extractCleanTitle } from './semanticParser.js';
 
 /* ---------- helpers ---------- */
@@ -30,14 +30,6 @@ function addDays(d, n) {
   next.setDate(next.getDate() + n);
   return next;
 }
-
-const today = todayDate();
-const friday = (() => {
-  const d = new Date();
-  const diff = 5 - d.getDay();
-  d.setDate(d.getDate() + (diff <= 0 ? diff + 7 : diff));
-  return d;
-})();
 
 /* ---------- Seed Tasks ---------- */
 const INITIAL_TASKS = [];
@@ -218,7 +210,7 @@ function inferTaskMeta(task) {
 /**
  * Calculates target scheduled date string(s) for a one-time deadline task across the week horizon.
  */
-function getOneTimeTargetDates(taskMeta, baseDateObj) {
+function getOneTimeTargetDates(taskMeta) {
   const dur = taskMeta.duration;
   const today = todayDate();
   const todayStr = ymd(today);
@@ -2931,37 +2923,6 @@ function parseDurationMinsFromText(textLower) {
   if (mHours) total += Math.round(parseFloat(mHours[1]) * 60);
   if (mMins) total += parseInt(mMins[1], 10);
   return total > 0 ? total : null;
-}
-
-function parseDeadlineFromText(textLower, targetDateObj) {
-  // Checks e.g. "due in 2 days", "due in two days", "due tomorrow", "due friday"
-  const mTwoDays = textLower.match(/due\s+(?:in\s+)?(?:two|2)\s+days/i);
-  if (mTwoDays) {
-    const d = addDays(targetDateObj, 2);
-    return `${ymd(d)}T23:59:00`;
-  }
-  const mThreeDays = textLower.match(/due\s+(?:in\s+)?(?:three|3)\s+days/i);
-  if (mThreeDays) {
-    const d = addDays(targetDateObj, 3);
-    return `${ymd(d)}T23:59:00`;
-  }
-  const mTomorrow = textLower.match(/due\s+tomorrow/i);
-  if (mTomorrow) {
-    const d = addDays(targetDateObj, 1);
-    return `${ymd(d)}T23:59:00`;
-  }
-  const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-  for (let i = 0; i < 7; i++) {
-    const re = new RegExp(`due\\s+(?:on\\s+)?${dayNames[i]}`, 'i');
-    if (re.test(textLower)) {
-      const nowDay = targetDateObj.getDay();
-      let diff = i - nowDay;
-      if (diff <= 0) diff += 7;
-      const d = addDays(targetDateObj, diff);
-      return `${ymd(d)}T23:59:00`;
-    }
-  }
-  return null;
 }
 
 function validateScheduleInvariants(daySchedule, wakeMins, sleepMins) {

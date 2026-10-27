@@ -10,13 +10,6 @@ import {
   Laptop,
   Plus,
   Trash2,
-  Clock,
-  Calendar,
-  Sparkles,
-  MapPin,
-  ListTodo,
-  Heart,
-  BookOpen,
 } from 'lucide-react';
 import { saveOnboarding, generateSchedule, errText } from '../api/client';
 import { getUniqueAnchors, getFocusLabel } from './onboardingHelpers';

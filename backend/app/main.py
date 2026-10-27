@@ -16,9 +16,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Orbit API", lifespan=lifespan)
 
+cors_origins_list = [origin.strip() for origin in settings.cors_origins.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

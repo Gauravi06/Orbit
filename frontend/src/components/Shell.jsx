@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { NavLink, Link, useNavigate } from 'react-router-dom';
 import {
   Calendar,
@@ -21,7 +21,10 @@ import { resetDemo, seedDemoStudent, getInterventions, dismissIntervention, snoo
 import './Shell.css';
 
 const IS_MOCK = import.meta.env.VITE_USE_MOCK === 'true';
-const IS_DEV = import.meta.env.DEV;
+
+function computeSnoozeIso(hours = 3) {
+  return new Date(Date.now() + hours * 3600 * 1000).toISOString();
+}
 
 export function Shell({ children }) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -54,31 +57,34 @@ export function Shell({ children }) {
   const [bellOpen, setBellOpen] = useState(false);
   const bellRef = useRef(null);
 
-  const fetchInterventions = useCallback(async () => {
-    try {
-      const list = await getInterventions('active');
-      setInterventions(Array.isArray(list) ? list : []);
-    } catch {
-      // Ignore background fetch errors in shell
-    }
-  }, []);
-
   useEffect(() => {
-    fetchInterventions();
-    const interval = setInterval(fetchInterventions, 30000);
-    const handleUpdate = () => fetchInterventions();
+    let ignore = false;
+    const load = async () => {
+      try {
+        const list = await getInterventions('active');
+        if (!ignore) {
+          setInterventions(Array.isArray(list) ? list : []);
+        }
+      } catch {
+        // Ignore background fetch errors in shell
+      }
+    };
+
+    load();
+    const interval = setInterval(load, 30000);
+    const handleUpdate = () => { load(); };
     window.addEventListener('orbit-interventions-updated', handleUpdate);
     return () => {
+      ignore = true;
       clearInterval(interval);
       window.removeEventListener('orbit-interventions-updated', handleUpdate);
     };
-  }, [fetchInterventions]);
+  }, []);
 
   const handleSnooze = async (id, hours = 3) => {
     try {
-      const snoozeUntil = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      const snoozeUntil = computeSnoozeIso(hours);
       await snoozeIntervention(id, snoozeUntil);
-      await fetchInterventions();
       window.dispatchEvent(new Event('orbit-interventions-updated'));
     } catch (e) {
       console.error('Failed to snooze intervention', e);
@@ -88,7 +94,6 @@ export function Shell({ children }) {
   const handleDismiss = async (id) => {
     try {
       await dismissIntervention(id);
-      await fetchInterventions();
       window.dispatchEvent(new Event('orbit-interventions-updated'));
     } catch (e) {
       console.error('Failed to dismiss intervention', e);

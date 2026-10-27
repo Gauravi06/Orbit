@@ -11,9 +11,8 @@ import { errText } from '../src/api/errText.js';
 // ---------------------------------------------------------------------------
 async function simulateHandleFinish(saveOnboarding, generateSchedule, navigate) {
   let finishError = null;
-  let loading = false;
+  let loading;
 
-  loading = true;
   try {
     await saveOnboarding();
     await generateSchedule();

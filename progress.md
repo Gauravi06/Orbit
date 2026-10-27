@@ -720,3 +720,44 @@ The user visited `http://localhost:5173/changed` and asked to verify if it was w
   - Verified proposed schedule placements timeline with all time slots and badges.
   - Verified scrolling up shows the active proposal pill.
   - Clicked "Approve plan" and verified clean update and navigation to `/today`.
+
+---
+
+## 2026-10-27 — Security Remediation, PostgreSQL Live Smoke Test & Complete Lint Zeroing
+
+**Product Requirements Advanced:**
+Fulfillment of the Orbit handoff brief: repository & working-tree status verification, credential & configuration sanitization, live PostgreSQL end-to-end smoke testing across all 8 user journeys, and frontend ESLint zeroing.
+
+**Files Changed & Purpose:**
+- `backend/.env.example`: Sanitized credentials (`GEMINI_API_KEY`, `JWT_SECRET`) to safe placeholders.
+- `backend/app/core/config.py`: Added `cors_origins: str` allowing comma-separated configuration of permitted CORS hosts.
+- `backend/app/main.py`: Wired `settings.cors_origins.split(",")` into `CORSMiddleware`.
+- `backend/tests/test_fixed_commitment_regression_repair.py`: Corrected weekday-boundary idempotency calculation in `test_repeated_refresh_is_idempotent`.
+- `frontend/src/api/mock.js`: Removed unused imports, top-level unused `today`/`friday`, and dead helper functions (`parseDeadlineFromText`, `baseDateObj`).
+- `frontend/src/api/semanticParser.js`: Fixed regex hyphen escapes and declared variable bindings cleanly.
+- `frontend/src/components/Shell.jsx`: Removed unused `IS_DEV` and `useCallback`, moved `computeSnoozeIso` outside component scope, structured data fetching inside `useEffect`.
+- `frontend/src/pages/Insights.jsx`: Removed unused `loading` state, refactored data fetching inside `useEffect`.
+- `frontend/src/pages/Onboarding.jsx`: Removed unused Lucide icon imports.
+- `frontend/src/pages/Today.jsx`: Removed unused `unclosedNotice` and `checkUnclosedPastDay`, removed unused `stackStageRef`, unwrapped frontCard IIFE into direct JSX, memoized `items`, moved `computeSnoozeIso` outside component scope, bound card navigation callbacks cleanly.
+- `frontend/src/pages/Week.jsx`: Memoized `days` and `groups` with `useMemo`, updated `setSelectedDayDate` to functional updater.
+- `frontend/tests/onboarding.test.js`: Resolved useless assignment to `loading`.
+- `ORBIT_HANDOFF.md`: Updated reconciliation date, active branch, verification counts, smoke test results, and documented limitations.
+
+**Tests Run & Exact Results:**
+- Backend pytest full suite: **115 passed, 0 failed** in 109.05s (`python -m pytest -q` from `backend/`).
+- Frontend Vitest suite: **66 passed (8 suites), 0 failed** in 25.22s (`npm test` from `frontend/`).
+- Production build: **Clean build in 2.49s** (`npm run build` from `frontend/`).
+- ESLint: **0 errors, 0 warnings** (`npm run lint` from `frontend/`).
+- Whitespace check: **Clean, 0 errors** (`git diff --check`).
+- Live-backend smoke test (8 user journeys against live PostgreSQL 18 & FastAPI): **All 8 verified and passed** (`scratch/live_smoke_test.py`).
+
+**Known Limitations & Deferred Scope:**
+- LLM integration is restricted to disruption text analysis and proposal assist fallback.
+- Personalization based on historical completion logs is deferred.
+- Insights backend endpoint is deferred.
+- Voice, timetable image import, and meal planning are deferred.
+- Push notifications operate via in-app delivery.
+
+**Git Status:**
+- Commit made: no (awaiting user authorization).
+- Working tree preserved: yes.

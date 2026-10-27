@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Lock,
@@ -16,9 +16,7 @@ import {
   Loader2,
   CheckCircle2,
   HelpCircle,
-  CalendarCheck,
   ChevronDown,
-  ChevronUp,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
@@ -30,7 +28,6 @@ import {
 } from 'lucide-react';
 import {
   getSchedule,
-  generateSchedule,
   proposeSchedule,
   proposeDisruption,
   approveProposal,
@@ -40,7 +37,6 @@ import {
   setItemDone,
   closeDay,
   reopenDay,
-  checkUnclosedPastDay,
   replanSchedule,
   checkNoteVague,
   errText,
@@ -75,12 +71,16 @@ function formatDuration(mins) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+function computeSnoozeIso(hours = 3) {
+  return new Date(Date.now() + hours * 3600 * 1000).toISOString();
+}
+
 export function Today() {
   const [schedule, setSchedule] = useState(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
-  const [selectedDate, setSelectedDate] = useState(() => ymd(new Date()));
+  const [selectedDate] = useState(() => ymd(new Date()));
 
   // Active front-card index in the stack
   const [activeCardIndex, setActiveCardIndex] = useState(0);
@@ -94,9 +94,6 @@ export function Today() {
   // Quick disruption prompt input in "Something changed?" panel
   const [disruptText, setDisruptText] = useState('');
   const [disruptLoading, setDisruptLoading] = useState(false);
-
-  // Unclosed past day banner
-  const [unclosedNotice, setUnclosedNotice] = useState(null);
 
   // "Done for the day" state & summary card
   const [closingDay, setClosingDay] = useState(false);
@@ -135,27 +132,32 @@ export function Today() {
   // Proactive interventions state
   const [activeInterventions, setActiveInterventions] = useState([]);
 
-  const fetchActiveInterventions = useCallback(async () => {
-    try {
-      const list = await getInterventions('active');
-      setActiveInterventions(Array.isArray(list) ? list : []);
-    } catch {
-      // ignore
-    }
-  }, []);
-
   useEffect(() => {
-    fetchActiveInterventions();
-    const handleUpdate = () => fetchActiveInterventions();
+    let ignore = false;
+    const fetchInterventions = async () => {
+      try {
+        const list = await getInterventions('active');
+        if (!ignore) {
+          setActiveInterventions(Array.isArray(list) ? list : []);
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    fetchInterventions();
+    const handleUpdate = () => { fetchInterventions(); };
     window.addEventListener('orbit-interventions-updated', handleUpdate);
-    return () => window.removeEventListener('orbit-interventions-updated', handleUpdate);
-  }, [fetchActiveInterventions]);
+    return () => {
+      ignore = true;
+      window.removeEventListener('orbit-interventions-updated', handleUpdate);
+    };
+  }, []);
 
   const handleSnoozeIntervention = async (id, hours = 3) => {
     try {
-      const snoozeUntil = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+      const snoozeUntil = computeSnoozeIso(hours);
       await snoozeIntervention(id, snoozeUntil);
-      await fetchActiveInterventions();
       window.dispatchEvent(new Event('orbit-interventions-updated'));
     } catch (e) {
       console.error('Failed to snooze intervention', e);
@@ -165,7 +167,6 @@ export function Today() {
   const handleDismissIntervention = async (id) => {
     try {
       await dismissIntervention(id);
-      await fetchActiveInterventions();
       window.dispatchEvent(new Event('orbit-interventions-updated'));
     } catch (e) {
       console.error('Failed to dismiss intervention', e);
@@ -175,18 +176,6 @@ export function Today() {
 
   // Touch tracking for swipe gestures
   const touchStartY = useRef(null);
-  const stackStageRef = useRef(null);
-
-  // Current real-time clock tick for time-aware auto-updates
-  const [currentTimeTick, setCurrentTimeTick] = useState(() => Date.now());
-
-  // Periodically update current time to trigger time-aware updates without refresh
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setCurrentTimeTick(Date.now());
-    }, 30000); // Check every 30s
-    return () => clearInterval(timer);
-  }, []);
 
   // Load schedule for selected date
   const fetchSchedule = useCallback(async () => {
@@ -195,6 +184,13 @@ export function Today() {
     try {
       const data = await getSchedule(selectedDate);
       setSchedule(data);
+      userInteractedStackRef.current = false;
+      const currentItems = data?.items || [];
+      if (currentItems.length > 0 && selectedDate === ymd(new Date())) {
+        setActiveCardIndex(findCurrentOrNextBlockIndex(currentItems, new Date()));
+      } else {
+        setActiveCardIndex(0);
+      }
     } catch (err) {
       setError(errText(err));
     } finally {
@@ -212,14 +208,12 @@ export function Today() {
         if (active) {
           setSchedule(data);
           userInteractedStackRef.current = false;
-        }
-
-        // Check if yesterday was unclosed
-        const unclosed = await checkUnclosedPastDay();
-        if (active && unclosed && selectedDate === ymd(new Date())) {
-          setUnclosedNotice(unclosed);
-        } else if (active) {
-          setUnclosedNotice(null);
+          const currentItems = data?.items || [];
+          if (currentItems.length > 0 && selectedDate === ymd(new Date())) {
+            setActiveCardIndex(findCurrentOrNextBlockIndex(currentItems, new Date()));
+          } else {
+            setActiveCardIndex(0);
+          }
         }
       } catch (err) {
         if (active) setError(errText(err));
@@ -234,24 +228,18 @@ export function Today() {
   }, [selectedDate]);
 
   // Synchronize front-card selection based on local time
-  const items = schedule?.items || [];
+  const items = useMemo(() => schedule?.items || [], [schedule?.items]);
   const isSelectedDateToday = selectedDate === ymd(new Date());
 
+  // Periodically update current time to trigger time-aware updates without refresh
   useEffect(() => {
-    if (!items || items.length === 0) {
-      setActiveCardIndex(0);
-      return;
-    }
-
-    // Only auto-advance to current/next block if viewing today and user hasn't explicitly navigated
-    if (isSelectedDateToday && !userInteractedStackRef.current) {
-      const bestIdx = findCurrentOrNextBlockIndex(items, new Date());
-      setActiveCardIndex(bestIdx);
-    } else if (!isSelectedDateToday && !userInteractedStackRef.current) {
-      // For viewing other days, start from the first block
-      setActiveCardIndex(0);
-    }
-  }, [items, isSelectedDateToday, currentTimeTick]);
+    const timer = setInterval(() => {
+      if (!userInteractedStackRef.current && isSelectedDateToday && items.length > 0) {
+        setActiveCardIndex(findCurrentOrNextBlockIndex(items, new Date()));
+      }
+    }, 30000); // Check every 30s
+    return () => clearInterval(timer);
+  }, [items, isSelectedDateToday]);
 
   // Modals keyboard escape handler
   useEffect(() => {
@@ -266,6 +254,19 @@ export function Today() {
     }
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [offModalOpen, vagueModalOpen]);
+
+  // Card navigation handlers (Swipe up / PageDown to advance; Swipe down / PageUp to revisit earlier)
+  const handleNextCard = useCallback(() => {
+    if (items.length <= 1) return;
+    userInteractedStackRef.current = true;
+    setActiveCardIndex((prev) => Math.min(items.length - 1, prev + 1));
+  }, [items.length]);
+
+  const handlePrevCard = useCallback(() => {
+    if (items.length <= 1) return;
+    userInteractedStackRef.current = true;
+    setActiveCardIndex((prev) => Math.max(0, prev - 1));
+  }, [items.length]);
 
   // Laptop keyboard navigation: PageDown / PageUp
   useEffect(() => {
@@ -286,20 +287,7 @@ export function Today() {
 
     window.addEventListener('keydown', handleStackKeyNav);
     return () => window.removeEventListener('keydown', handleStackKeyNav);
-  }, [items.length, activeCardIndex]);
-
-  // Card navigation handlers (Swipe up / PageDown to advance; Swipe down / PageUp to revisit earlier)
-  const handleNextCard = () => {
-    if (items.length <= 1) return;
-    userInteractedStackRef.current = true;
-    setActiveCardIndex((prev) => Math.min(items.length - 1, prev + 1));
-  };
-
-  const handlePrevCard = () => {
-    if (items.length <= 1) return;
-    userInteractedStackRef.current = true;
-    setActiveCardIndex((prev) => Math.max(0, prev - 1));
-  };
+  }, [items.length, handleNextCard, handlePrevCard]);
 
   // Touch swipe handling
   const handleTouchStart = (e) => {
@@ -579,14 +567,6 @@ export function Today() {
     setClarifyQ2('');
   };
 
-  const deepWorkMins = items
-    .filter((i) => i.kind === 'deep' && i.status !== 'displaced')
-    .reduce((acc, i) => acc + calcMinutes(i.start_time, i.end_time), 0);
-  const totalStudyMins = items
-    .filter((i) => (i.kind === 'deep' || i.kind === 'short') && i.status !== 'displaced')
-    .reduce((acc, i) => acc + calcMinutes(i.start_time, i.end_time), 0);
-  const displacedCount = items.filter((i) => i.displacement_reason).length;
-
   const renderKindBadge = (kind, displaced, tier) => {
     if (displaced) {
       return <span className="pop-pill-badge" style={{ background: 'var(--pop-pink)' }}>Rescheduled</span>;
@@ -641,6 +621,12 @@ export function Today() {
   // Current front card and rear card
   const frontCard = items[activeCardIndex] || null;
   const rearCard = items.length > 1 && activeCardIndex < items.length - 1 ? items[activeCardIndex + 1] : null;
+  const frontCardDuration = frontCard ? calcMinutes(frontCard.start_time, frontCard.end_time) : 0;
+  const frontCardIsDisplaced = !!frontCard?.displacement_reason;
+  const frontCardIsDone = !!frontCard?.done;
+  const frontCardTimeStatus = frontCard && isSelectedDateToday
+    ? getBlockTimeStatus(frontCard, new Date())
+    : 'scheduled';
 
   return (
     <div className="today-page">
@@ -849,7 +835,6 @@ export function Today() {
           {/* Interactive Stack Stage */}
           <div
             className="today-stack-stage"
-            ref={stackStageRef}
             tabIndex={0}
             onTouchStart={handleTouchStart}
             onTouchEnd={handleTouchEnd}
@@ -882,132 +867,123 @@ export function Today() {
             )}
 
             {/* FRONT CARD: Perfectly straight, thick black outline, hard offset shadow */}
-            {frontCard && (() => {
-              const duration = calcMinutes(frontCard.start_time, frontCard.end_time);
-              const isDisplaced = !!frontCard.displacement_reason;
-              const isDone = !!frontCard.done;
-              const timeStatus = isSelectedDateToday
-                ? getBlockTimeStatus(frontCard, new Date())
-                : 'scheduled';
-
-              return (
-                <div
-                  className={`pop-card-front kind-${frontCard.kind} ${isDone ? 'is-completed' : ''}`}
-                >
-                  <div className="pop-card-top-row">
-                    <div className="pop-card-badges">
-                      {isSelectedDateToday && timeStatus === 'in_progress' && (
-                        <span className="pop-pill-badge pop-pill-in-progress">
-                          ● In progress
-                        </span>
-                      )}
-                      {isSelectedDateToday && timeStatus === 'upcoming' && (
-                        <span className="pop-pill-badge pop-pill-upcoming">
-                          Upcoming
-                        </span>
-                      )}
-                      {isSelectedDateToday && timeStatus === 'completed_time' && !isDone && (
-                        <span className="pop-pill-badge pop-pill-completed">
-                          Past scheduled time
-                        </span>
-                      )}
-                      {renderKindBadge(frontCard.kind, isDisplaced, frontCard.tier)}
-                    </div>
-
-                    <div className="pop-card-time-display">
-                      <Clock size={13} strokeWidth={2.5} />
-                      <span>
-                        {formatTime(frontCard.start_time)} – {formatTime(frontCard.end_time)}
+            {frontCard && (
+              <div
+                className={`pop-card-front kind-${frontCard.kind} ${frontCardIsDone ? 'is-completed' : ''}`}
+              >
+                <div className="pop-card-top-row">
+                  <div className="pop-card-badges">
+                    {isSelectedDateToday && frontCardTimeStatus === 'in_progress' && (
+                      <span className="pop-pill-badge pop-pill-in-progress">
+                        ● In progress
                       </span>
-                    </div>
-                  </div>
-
-                  <div className="pop-card-main-content">
-                    {/* Checkbox for non-fixed blocks */}
-                    {!frontCard.is_fixed ? (
-                      <button
-                        type="button"
-                        className={`pop-check-btn ${isDone ? 'checked' : ''}`}
-                        onClick={() => handleToggleDone(frontCard)}
-                        disabled={schedule?.is_closed}
-                        aria-label={`Mark ${frontCard.title} as ${isDone ? 'provisional' : 'completed'}`}
-                      >
-                        {isDone && <Check size={18} strokeWidth={3} />}
-                      </button>
-                    ) : (
-                      <div
-                        style={{
-                          width: '36px',
-                          height: '36px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          background: 'var(--pop-yellow)',
-                          border: 'var(--pop-border)',
-                          borderRadius: 'var(--pop-radius-sm)',
-                          boxShadow: '2px 2px 0 var(--pop-black)',
-                        }}
-                      >
-                        {getKindIcon(frontCard.kind)}
-                      </div>
                     )}
-
-                    <div className="pop-card-title-group">
-                      <h2 className={`pop-card-title ${isDone ? 'done-strike' : ''}`}>
-                        {frontCard.title}
-                      </h2>
-                      <span className="pop-card-duration-tag">
-                        {formatDuration(duration)}
-                        {frontCard.is_fixed ? ' · Protected Commitment' : ''}
+                    {isSelectedDateToday && frontCardTimeStatus === 'upcoming' && (
+                      <span className="pop-pill-badge pop-pill-upcoming">
+                        Upcoming
                       </span>
-                    </div>
+                    )}
+                    {isSelectedDateToday && frontCardTimeStatus === 'completed_time' && !frontCardIsDone && (
+                      <span className="pop-pill-badge pop-pill-completed">
+                        Past scheduled time
+                      </span>
+                    )}
+                    {renderKindBadge(frontCard.kind, frontCardIsDisplaced, frontCard.tier)}
                   </div>
 
-                  {/* Contextual notes / suggestions */}
-                  {isDisplaced && (
-                    <div className="pop-card-callout pop-card-callout-displaced">
-                      <CornerDownRight size={15} strokeWidth={2.5} />
-                      <span>{frontCard.displacement_reason}</span>
-                    </div>
-                  )}
-
-                  {frontCard.suggestion && !isDisplaced && (
-                    <div className="pop-card-callout pop-card-callout-suggestion">
-                      {frontCard.suggestion}
-                    </div>
-                  )}
-
-                  {/* Footer swipe controls helper */}
-                  <div className="pop-card-footer-controls">
-                    <span className="pop-card-swipe-hint">
-                      Swipe up or Page Down to browse
+                  <div className="pop-card-time-display">
+                    <Clock size={13} strokeWidth={2.5} />
+                    <span>
+                      {formatTime(frontCard.start_time)} – {formatTime(frontCard.end_time)}
                     </span>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                      {activeCardIndex > 0 && (
-                        <button
-                          type="button"
-                          className="pop-btn pop-btn-yellow"
-                          style={{ padding: '4px 10px', fontSize: '12px' }}
-                          onClick={handlePrevCard}
-                        >
-                          Previous
-                        </button>
-                      )}
-                      {activeCardIndex < items.length - 1 && (
-                        <button
-                          type="button"
-                          className="pop-btn pop-btn-lime"
-                          style={{ padding: '4px 10px', fontSize: '12px' }}
-                          onClick={handleNextCard}
-                        >
-                          Next block
-                        </button>
-                      )}
-                    </div>
                   </div>
                 </div>
-              );
-            })()}
+
+                <div className="pop-card-main-content">
+                  {/* Checkbox for non-fixed blocks */}
+                  {!frontCard.is_fixed ? (
+                    <button
+                      type="button"
+                      className={`pop-check-btn ${frontCardIsDone ? 'checked' : ''}`}
+                      onClick={() => handleToggleDone(frontCard)}
+                      disabled={schedule?.is_closed}
+                      aria-label={`Mark ${frontCard.title} as ${frontCardIsDone ? 'provisional' : 'completed'}`}
+                    >
+                      {frontCardIsDone && <Check size={18} strokeWidth={3} />}
+                    </button>
+                  ) : (
+                    <div
+                      style={{
+                        width: '36px',
+                        height: '36px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: 'var(--pop-yellow)',
+                        border: 'var(--pop-border)',
+                        borderRadius: 'var(--pop-radius-sm)',
+                        boxShadow: '2px 2px 0 var(--pop-black)',
+                      }}
+                    >
+                      {getKindIcon(frontCard.kind)}
+                    </div>
+                  )}
+
+                  <div className="pop-card-title-group">
+                    <h2 className={`pop-card-title ${frontCardIsDone ? 'done-strike' : ''}`}>
+                      {frontCard.title}
+                    </h2>
+                    <span className="pop-card-duration-tag">
+                      {formatDuration(frontCardDuration)}
+                      {frontCard.is_fixed ? ' · Protected Commitment' : ''}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Contextual notes / suggestions */}
+                {frontCardIsDisplaced && (
+                  <div className="pop-card-callout pop-card-callout-displaced">
+                    <CornerDownRight size={15} strokeWidth={2.5} />
+                    <span>{frontCard.displacement_reason}</span>
+                  </div>
+                )}
+
+                {frontCard.suggestion && !frontCardIsDisplaced && (
+                  <div className="pop-card-callout pop-card-callout-suggestion">
+                    {frontCard.suggestion}
+                  </div>
+                )}
+
+                {/* Footer swipe controls helper */}
+                <div className="pop-card-footer-controls">
+                  <span className="pop-card-swipe-hint">
+                    Swipe up or Page Down to browse
+                  </span>
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {activeCardIndex > 0 && (
+                      <button
+                        type="button"
+                        className="pop-btn pop-btn-yellow"
+                        style={{ padding: '4px 10px', fontSize: '12px' }}
+                        onClick={handlePrevCard}
+                      >
+                        Previous
+                      </button>
+                    )}
+                    {activeCardIndex < items.length - 1 && (
+                      <button
+                        type="button"
+                        className="pop-btn pop-btn-lime"
+                        style={{ padding: '4px 10px', fontSize: '12px' }}
+                        onClick={handleNextCard}
+                      >
+                        Next block
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1039,7 +1015,6 @@ export function Today() {
           {fullScheduleOpen && (
             <div className="today-accordion-content">
               {items.map((item, idx) => {
-                const dur = calcMinutes(item.start_time, item.end_time);
                 const isDisplaced = !!item.displacement_reason;
                 const isDone = !!item.done;
                 const isActive = idx === activeCardIndex;

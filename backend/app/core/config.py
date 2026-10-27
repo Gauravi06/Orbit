@@ -14,4 +14,6 @@ class Settings(BaseSettings):
     intervention_worker_enabled: bool = True
     intervention_approaching_hours: int = 24
 
+    cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
+
 settings = Settings()

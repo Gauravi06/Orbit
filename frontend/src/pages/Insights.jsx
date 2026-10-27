@@ -20,7 +20,6 @@ import './Insights.css';
 
 export function Insights() {
   const [insights, setInsights] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState(null);
   const [seeding, setSeeding] = useState(false);
   const [notification, setNotification] = useState('');
@@ -31,13 +30,25 @@ export function Insights() {
       setInsights(list || []);
     } catch {
       // ignore
-    } finally {
-      setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadData();
+    let ignore = false;
+    const fetchInsights = async () => {
+      try {
+        const list = await getInsights();
+        if (!ignore) {
+          setInsights(list || []);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    fetchInsights();
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const handleFeedback = async (insightId, feedbackType) => {

@@ -1,6 +1,7 @@
 # Orbit — Current Engineering Handoff
 
-**Last reconciled:** 21 October 2026  
+**Last reconciled:** 27 October 2026<br/>
+**Active Branch:** `aniket_fix` (HEAD at `2fa8d8c`)<br/>
 **Purpose:** Single source of truth for the current product requirements, implementation state, verified evidence, and next engineering task.
 
 > Read this file before making changes. Inspect the actual repository before relying on any statement about implementation. If code and this document disagree, investigate the discrepancy and update the document after verification.
@@ -382,3 +383,53 @@ No commit made. Preserve all existing working-tree changes.
     - Clicked "Approve plan" and verified clean update and navigation to `/today`.
   - `git diff --check`: Clean (0 whitespace/formatting errors).
 - No commit made. Preserve all existing working-tree changes.
+
+## 2026-10-27 — Security Remediation, PostgreSQL Live Smoke Test & Complete Lint Zeroing
+
+### A. Working-tree state & branch inspection
+- Current active branch: `aniket_fix` at commit `2fa8d8c` (parent `c7eb472` on `feature/orbit-product`).
+- The duplicate `@router.delete("/{task_id}")` decorator previously flagged in `backend/app/api/routes/tasks.py` had already been removed in `2fa8d8c`.
+- Fixed a weekday-boundary calculation bug in `backend/tests/test_fixed_commitment_regression_repair.py` (`test_repeated_refresh_is_idempotent`), where testing on Tuesdays previously caused a 7-day boundary double-counting mismatch.
+
+### B. Configuration & security remediation
+- Sanitized `backend/.env.example`: replaced actual-looking `GEMINI_API_KEY` and `JWT_SECRET` values with safe placeholders (`your_gemini_api_key_here`, `your_jwt_secret_change_in_production`).
+- CORS origin made fully configurable: added `cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173"` to `backend/app/core/config.py` and configured `CORSMiddleware` in `backend/app/main.py` to parse comma-separated origin lists, preventing hardcoded production deployment restrictions.
+
+### C. Live-backend PostgreSQL smoke test (All 8 Journeys Verified)
+Ran dedicated test against live FastAPI with real PostgreSQL 18 cluster (at `localhost:5433`, database `orbit_db`, Alembic head `c1d2e3f4a5b6_create_interventions_table`):
+1. **Onboarding & Preferences:** Signup (`smoke_20261027_183204@orbit.test`), login, questionnaire completion. Saved wake/sleep (07:30/23:30), commute (15m), focus length (45m), and inserted fixed commitments into `tasks` table (`Evening Seminar` on Tuesdays 19:30-21:00).
+2. **Fixed Commitments & Buffers:** Generated schedule; fixed commitment placed at 19:30-21:00 and commute buffers (19:15-21:15) strictly respected without task collision.
+3. **Today & Week View Agreement:** `GET /schedules` and `GET /schedules/week` for the same date confirmed identical (4 activities across both endpoints; 0 dropped or missing tasks).
+4. **Task Addition & Proposal Generation:** Added urgent task (`Urgent Lab Report`, 90 mins, due tomorrow); `/schedules/propose` generated structured displacement proposal without mutating active schedule rows.
+5. **Approval & Rejection Safety:** Rejection left active schedule untouched. Explicit approval applied reviewed placements to the active schedule.
+6. **Disruption Validation Persistence Guard:** Invalid disruption request rejected by rule validator; verified row-level immutability with zero database corruption.
+7. **Proactive Intervention Lifecycle:** Approaching deadline detected (`Approaching deadline: Urgent Lab Report`), deduplicated via `uq_interventions_dedup_key`, snoozed with valid future timestamp, and dismissed cleanly.
+8. **Cold Restart & Persistence Consistency:** Re-instantiated fresh database connection and client simulating server restart; verified user, preferences, active schedules, and interventions remain 100% consistent.
+- Re-run script persisted at: `scratch/live_smoke_test.py`.
+
+### D. Complete ESLint cleanup (41 errors + 4 warnings -> 0 errors, 0 warnings)
+Cleaned all ESLint errors across the frontend without introducing unrelated refactors:
+- `frontend/src/pages/Today.jsx`: Removed unused `unclosedNotice` and `checkUnclosedPastDay`, removed unused `stackStageRef`, unwrapped frontCard IIFE into direct JSX, memoized `items`, moved `computeSnoozeIso` outside component scope, and bound card navigation callbacks cleanly.
+- `frontend/src/pages/Week.jsx`: Memoized `days` and `groups` with `useMemo`, updated `setSelectedDayDate` to use a functional updater eliminating missing dependency warning.
+- `frontend/src/pages/Insights.jsx`: Removed unused `loading` state, refactored data fetching inside `useEffect`.
+- `frontend/src/components/Shell.jsx`: Removed unused `IS_DEV` and `useCallback`, moved `computeSnoozeIso` outside component scope, and structured data fetching inside `useEffect`.
+- `frontend/src/api/mock.js`: Removed unused imports (`parseDeadline`, `extractCleanTitle`), removed unused module-level `today` and `friday`, removed unused `baseDateObj` parameter from `getOneTimeTargetDates`, and removed unused `parseDeadlineFromText`.
+- `frontend/src/api/semanticParser.js`: Fixed regex hyphen escapes and declared variable bindings cleanly.
+- `frontend/src/pages/Onboarding.jsx`: Removed unused Lucide icon imports.
+- `frontend/tests/onboarding.test.js`: Resolved useless assignment to `loading`.
+
+### E. Current test & build verification summary
+- **Backend pytest suite:** **115 passed**, 0 failed (`python -m pytest -q` in `backend/`).
+- **Frontend test suite:** **66 passed**, 0 failed (`npm test` in `frontend/`).
+- **Frontend production build:** **Clean build in 2.49s** (`npm run build` in `frontend/`).
+- **ESLint:** **0 errors, 0 warnings** (`npm run lint` in `frontend/`).
+- **`git diff --check`:** **Clean (0 whitespace errors)**.
+
+### F. Explicitly documented limitations & deferred scope
+- **LLM integration:** Limited to `POST /schedules/disrupt-text` and an initial attempt on `POST /schedules/propose`. `/notes/understand`, `/schedules/replan`, and frontend semantic parsing rely on deterministic heuristics. Deterministic scheduling functions as an intentional resilient fallback. Orbit is an adaptive deterministic companion, not a freeform chatbot.
+- **Behavioral personalization:** User feedback and reflections are stored in PostgreSQL, but behavioral adaptive learning from historical completion logs is not yet implemented into the scheduler rule engine (deferred to post-P0).
+- **Insights backend endpoint:** The Insights UI exists with interactive demo capabilities; a production analytics backend endpoint is deferred.
+- **Voice, timetable image import, and meal planning:** Not implemented and deferred for future releases.
+- **Push notification delivery:** Interventions are detected and stored by background workers; delivery occurs in-app via notification bell and banners (native Web Push / APNs not yet integrated).
+
+- No commit made. Preserved all working-tree modifications.

@@ -191,10 +191,10 @@ export function extractCleanTitle(rawText) {
   text = text.replace(/\b(?:like\s*to|hobby|low\s*priority|optional)\b/gi, '');
 
   // Clean trailing/leading and orphaned punctuation, dots, dashes, and extra spaces
-  text = text.replace(/\s+[.;,–—\-]+(?=\s|$)/g, ' ');
+  text = text.replace(/\s+[.;,–—-]+(?=\s|$)/g, ' ');
   text = text
-    .replace(/[.;,–—\-]+$/g, '')
-    .replace(/^[.;,–—\-]+/g, '')
+    .replace(/[.;,–—-]+$/g, '')
+    .replace(/^[.;,–—-]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -240,7 +240,7 @@ export function parseTaskSemantics(note, taskContext = {}) {
   const preferredTime = [];
   const avoidTime = [];
   let estimatedDuration = null;
-  let frequency = null;
+  let frequency;
   let splitPreference = null;
   let preferredSessionCount = null;
   let afterCommitment = null;
@@ -249,7 +249,7 @@ export function parseTaskSemantics(note, taskContext = {}) {
   let avoidAfterLongDay = false;
   let anchorAware = false;
   let flexibleTiming = false;
-  let strength = 'preferred';
+  let strength;
 
   // 1. DURATION PARSING
   // Match patterns like "240 mins", "90m", "1 hour", "2 hrs", "1.5h", "around an hour", "half an hour"
@@ -294,7 +294,7 @@ export function parseTaskSemantics(note, taskContext = {}) {
   }
 
   // 3. PRIORITY TIER PARSING (RULES 2, 4, 5)
-  let tier = 'have_to';
+  let tier;
   // Check explicit priority first (RULE 5)
   if (/\b(?:need\s*to|must\s*(?:do|finish)?|have\s*to|urgent|high\s*priority|important|critical|top\s*priority)\b/.test(clean)) {
     tier = 'have_to'; // Need To

@@ -317,11 +317,20 @@ class TestFixedCommitmentRegressionRepair(unittest.TestCase):
     # Test 4: Repeated refresh/generation is idempotent with no duplicates
     # -----------------------------------------------------------------------
     def test_repeated_refresh_is_idempotent(self):
+        today = date.today()
+        fixed_now = datetime.combine(today, time(5, 0))
+        weekday_names = [
+            "Monday", "Tuesday", "Wednesday", "Thursday",
+            "Friday", "Saturday", "Sunday",
+        ]
+        # Choose a day that doesn't collide with the 7-day boundary offset (offset 2)
+        target_weekday = weekday_names[(today.weekday() + 2) % 7]
+
         payload = {
             "fixed_commitments": [
                 {
                     "name": "Lab Session",
-                    "days": "Tuesday",
+                    "days": target_weekday,
                     "start_time": "10:00",
                     "end_time": "13:00",
                     "commute_before": 10,
@@ -337,7 +346,7 @@ class TestFixedCommitmentRegressionRepair(unittest.TestCase):
             .count()
         )
 
-        with patch("app.api.routes.schedules._now", return_value=FIXED_NOW):
+        with patch("app.api.routes.schedules._now", return_value=fixed_now):
             self.client.post("/schedules/generate", headers=self.auth_headers)
             self.client.post("/schedules/generate", headers=self.auth_headers)
 
@@ -346,6 +355,7 @@ class TestFixedCommitmentRegressionRepair(unittest.TestCase):
             .filter(Task.user_id == self.user.id, Task.is_fixed.is_(True))
             .count()
         )
+        self.assertGreater(count_initial, 0)
         self.assertEqual(count_initial, count_after)
 
     # -----------------------------------------------------------------------
